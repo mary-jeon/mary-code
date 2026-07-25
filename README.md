@@ -1,6 +1,8 @@
 # Mary Code
 
-> **Rv.0 / plugin 0.1.0 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.2.0 · Experimental · Claude Code**
+>
+> **English** (canonical) · [한국어](./README.ko.md)
 
 **AI sounds convincing even when it is wrong.**
 
@@ -270,7 +272,7 @@ The plugin components must stay together.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.1.0 · Experimental**
+**Current version: Rv.0 / plugin 0.2.0 · Experimental**
 
 Working now:
 
@@ -299,7 +301,7 @@ Before a stable release:
 - confirm empirically whether the host emits `PermissionDenied` on a manual denial;
 - measure missed and unnecessary automatic activation;
 - expand regression coverage beyond recognized shell patterns;
-- publish an English canonical `SKILL.md` — the workflow text is currently Korean, which the model follows in any language, but global users should be able to audit the procedure they are trusting; and
+- submit to the Anthropic community plugin marketplace ([anthropics/claude-plugins-community](https://github.com/anthropics/claude-plugins-community)); and
 - test the decision-retrace engine against its counterexample scenarios.
 
 Later:

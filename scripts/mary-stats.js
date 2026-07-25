@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 /**
- * Mary — FAILLOG·_work 검산기 (읽기 전용)
+ * Mary — FAILLOG / _work auditor (read-only)
  *
  *   node scripts/mary-stats.js
  *
- * 카운터 산술과 승격 후보 판정을 모델의 기억이 아니라 코드로 재계산한다.
- * SKILL.md 5단계가 요구하는 판정("같은 키가 서로 다른 task_id 에서 2회")은
- * 기계적인 계산인데, 기계적인 계산을 LLM이 하면 그 자체가 오류원이 된다
- * (L4 plan-execution-mismatch). 그래서 여기로 옮겼다.
+ * Recomputes counter arithmetic and rule-promotion candidacy in code instead of
+ * trusting the model's memory. The judgment SKILL.md stage 5 requires ("same key
+ * in two different task_ids") is mechanical, and mechanical computation performed
+ * by an LLM is itself an error source (L4 plan-execution-mismatch). So it lives here.
  *
- * 아무것도 고치지 않는다. 불일치를 보고만 한다 — 고칠지는 절차(5단계)가 판정한다.
+ * This script fixes nothing. It only reports inconsistencies — whether to fix them
+ * is decided by the procedure (stage 5).
  *
- * 한계(정직하게): FAILLOG 본문은 손실 압축이다. 승격된 실패는 두 줄이 한 줄로
- * 압축되므로 본문 재집계는 누적 카운터의 **하한**이지 등식이 아니다.
- * 그래서 본문 개수와 카운터가 다르다는 것만으로 오류로 판정하지 않고,
- * 카운터가 본문 개수보다 **작을 때만** 확실한 모순으로 보고한다.
+ * Honest limitation: the FAILLOG body is lossy compression. Promoted failures are
+ * collapsed from two lines into one, so a body recount is a **lower bound** on the
+ * counters, not an equation. Therefore a body-count/counter mismatch alone is not
+ * an error; only a counter that is *smaller* than the body count is reported as a
+ * definite contradiction.
+ *
+ * Labels are matched bilingually (English and Korean) so ledgers created by
+ * earlier Korean skeletons keep auditing cleanly.
  */
 
 'use strict';
@@ -30,15 +35,15 @@ function readIfExists(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
 }
 
-/* ── FAILLOG 파싱 ─────────────────────────────────────────────── */
+/* ── FAILLOG parsing ─────────────────────────────────────────────── */
 
 const COUNTER_KEYS = [
-  ['tasks',     /^-\s*실행된 하네스 작업\s*[:：]\s*(\d+)/],
-  ['completed', /^-\s*검증 완료[^:：]*[:：]\s*(\d+)/],
-  ['blocked',   /^-\s*차단·실패[^:：]*[:：]\s*(\d+)/],
-  ['stopped',   /^-\s*사용자 중단[^:：]*[:：]\s*(\d+)/],
-  ['failures',  /^-\s*발견된 실패\s*[:：]\s*(\d+)/],
-  ['rejected',  /^-\s*기각된 반례\s*[:：]\s*(\d+)/],
+  ['tasks',     /^-\s*(harness tasks run|실행된 하네스 작업)\s*[:：]\s*(\d+)/],
+  ['completed', /^-\s*(verified complete[^:：]*|검증 완료[^:：]*)[:：]\s*(\d+)/],
+  ['blocked',   /^-\s*(blocked\/failed[^:：]*|차단·실패[^:：]*)[:：]\s*(\d+)/],
+  ['stopped',   /^-\s*(user-stopped[^:：]*|사용자 중단[^:：]*)[:：]\s*(\d+)/],
+  ['failures',  /^-\s*(failures found|발견된 실패)\s*[:：]\s*(\d+)/],
+  ['rejected',  /^-\s*(rejected counterexamples|기각된 반례)\s*[:：]\s*(\d+)/],
 ];
 
 function parseFaillog(text) {
@@ -46,12 +51,12 @@ function parseFaillog(text) {
   for (const line of text.split('\n')) {
     for (const [key, re] of COUNTER_KEYS) {
       const m = line.match(re);
-      if (m && counters[key] === undefined) counters[key] = Number(m[1]);
+      if (m && counters[key] === undefined) counters[key] = Number(m[2]);
     }
   }
 
-  // 항목: "- YYYY-MM-DD | task:ID | L<n>/<key> | scope: X | 실패:|기각: …"
-  // 연속 줄(들여쓰기 | 로 시작)은 같은 항목의 일부다.
+  // Entries: "- YYYY-MM-DD | task:ID | L<n>/<key> | scope: X | failure:|rejected: …"
+  // Continuation lines (indented, starting with |) belong to the same entry.
   const entries = [];
   let cur = null;
   for (const line of text.split('\n')) {
@@ -71,15 +76,15 @@ function parseFaillog(text) {
     const task = (e.match(/task:\s*([\w가-힣.-]+)/) || [])[1] || null;
     const key = (e.match(/\bL(?:\d+(?:-[A-Z])?|\?)\/[a-z0-9?-]+/i) || [])[0] || null;
     const scope = (e.match(/scope:\s*([^\s|]+)/) || [])[1] || null;
-    const kind = /\|\s*기각\s*[:：]/.test(e) ? 'rejected'
-               : /\|\s*실패\s*[:：]/.test(e) ? 'failure' : 'unknown';
+    const kind = /\|\s*(rejected|기각)\s*[:：]/.test(e) ? 'rejected'
+               : /\|\s*(failure|실패)\s*[:：]/.test(e) ? 'failure' : 'unknown';
     return { task, key, scope, kind, raw: e };
   });
 
   return { counters, entries: parsed };
 }
 
-/* ── _work 파싱 ───────────────────────────────────────────────── */
+/* ── _work parsing ───────────────────────────────────────────────── */
 
 function parseWork(text, file) {
   const grab = k => {
@@ -89,7 +94,7 @@ function parseWork(text, file) {
   return { file, status: grab('status'), counted: grab('counted_status'), task: grab('task_id') };
 }
 
-/* ── 분석 ─────────────────────────────────────────────────────── */
+/* ── Analysis ────────────────────────────────────────────────────── */
 
 const BUCKET = {
   completed: 'completed',
@@ -105,7 +110,7 @@ function analyze({ faillog, works }) {
   const rejected = faillog.entries.filter(e => e.kind === 'rejected');
   report.recount = { failures: failures.length, rejected: rejected.length };
 
-  // 승격 후보: 실패만, other 제외, 서로 다른 task 2개 이상
+  // Promotion candidates: failures only, no /other, two or more distinct tasks
   const byKey = new Map();
   for (const f of failures) {
     if (!f.key || /\/other$/i.test(f.key) || !f.task) continue;
@@ -119,40 +124,40 @@ function analyze({ faillog, works }) {
     }
   }
 
-  // 확실한 모순만 경고한다 (본문은 손실 압축이므로 하한 비교)
+  // Only definite contradictions are warned about (body is lossy → lower bound)
   const c = faillog.counters;
   if (c.failures !== undefined && c.failures < failures.length) {
-    report.warnings.push(`발견된 실패 카운터(${c.failures})가 본문 실패 항목 수(${failures.length})보다 작다`);
+    report.warnings.push(`failures counter (${c.failures}) is smaller than the number of failure entries in the body (${failures.length})`);
   }
   if (c.rejected !== undefined && c.rejected < rejected.length) {
-    report.warnings.push(`기각된 반례 카운터(${c.rejected})가 본문 기각 항목 수(${rejected.length})보다 작다`);
+    report.warnings.push(`rejected counter (${c.rejected}) is smaller than the number of rejected entries in the body (${rejected.length})`);
   }
   const sum = (c.completed || 0) + (c.blocked || 0) + (c.stopped || 0);
   if (c.tasks !== undefined && sum > c.tasks) {
-    report.warnings.push(`칸 합계(${sum})가 실행된 하네스 작업(${c.tasks})보다 크다 — 분모가 어긋났다`);
+    report.warnings.push(`bucket sum (${sum}) exceeds harness tasks run (${c.tasks}) — the denominator is off`);
   }
 
-  // _work 정합성
+  // _work consistency
   const seen = new Map();
   for (const w of works) {
-    if (!w.task) { report.warnings.push(`${w.file}: task_id 없음`); continue; }
-    if (seen.has(w.task)) report.warnings.push(`task_id 중복: ${w.task} (${seen.get(w.task)}, ${w.file})`);
+    if (!w.task) { report.warnings.push(`${w.file}: task_id missing`); continue; }
+    if (seen.has(w.task)) report.warnings.push(`duplicate task_id: ${w.task} (${seen.get(w.task)}, ${w.file})`);
     seen.set(w.task, w.file);
     const expect = BUCKET[w.status];
     if (expect && w.counted && w.counted !== expect && w.counted !== 'none') {
-      report.warnings.push(`${w.file}: status=${w.status} 인데 counted_status=${w.counted} (기대: ${expect} 또는 none)`);
+      report.warnings.push(`${w.file}: status=${w.status} but counted_status=${w.counted} (expected: ${expect} or none)`);
     }
   }
 
   return report;
 }
 
-/* ── 출력 ─────────────────────────────────────────────────────── */
+/* ── Output ──────────────────────────────────────────────────────── */
 
 function main() {
   const faillogText = readIfExists(path.join(MARY_DIR, 'FAILLOG.md'));
   if (faillogText === null) {
-    console.log(`FAILLOG.md 없음 (${MARY_DIR}) — 검산할 것이 없다.`);
+    console.log(`FAILLOG.md not found (${MARY_DIR}) — nothing to audit.`);
     return;
   }
   const works = [];
@@ -160,18 +165,18 @@ function main() {
     for (const f of fs.readdirSync(MARY_DIR)) {
       if (/^_work-.*\.md$/.test(f)) works.push(parseWork(readIfExists(path.join(MARY_DIR, f)) || '', f));
     }
-  } catch { /* 폴더를 못 읽으면 works 는 빈 채로 간다 */ }
+  } catch { /* if the directory is unreadable, works stays empty */ }
 
   const r = analyze({ faillog: parseFaillog(faillogText), works });
 
-  console.log('# mary-stats — 재계산 결과 (읽기 전용)\n');
-  console.log('기록된 카운터:', JSON.stringify(r.counters));
-  console.log('본문 재집계  :', `실패 ${r.recount.failures}건(하한) · 기각 ${r.recount.rejected}건(하한)`);
-  console.log('\n진행 중 _work:', r.works.length ? '' : '없음');
+  console.log('# mary-stats — recomputed (read-only)\n');
+  console.log('recorded counters:', JSON.stringify(r.counters));
+  console.log('body recount     :', `failures ${r.recount.failures} (lower bound) · rejected ${r.recount.rejected} (lower bound)`);
+  console.log('\nactive _work files:', r.works.length ? '' : 'none');
   for (const w of r.works) console.log(`  - ${w.file} · status=${w.status} · counted=${w.counted} · task=${w.task}`);
-  console.log('\n승격 후보 (서로 다른 task 2회 이상, other 제외):', r.candidates.length ? '' : '없음');
+  console.log('\npromotion candidates (2+ distinct tasks, /other excluded):', r.candidates.length ? '' : 'none');
   for (const cd of r.candidates) console.log(`  - ${cd.key} · tasks: ${cd.tasks.join(', ')} · scopes: ${cd.scopes.join(', ') || '?'}`);
-  console.log('\n경고:', r.warnings.length ? '' : '없음');
+  console.log('\nwarnings:', r.warnings.length ? '' : 'none');
   for (const w of r.warnings) console.log(`  ! ${w}`);
 }
 

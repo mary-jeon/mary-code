@@ -1,7 +1,7 @@
 {
   "name": "mary-code",
   "displayName": "Mary Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Task harness for Claude Code. Proceeds autonomously on reversible work, verifies claims against observable evidence, and gates irreversible actions behind user approval.",
   "author": {
     "name": "mary jeon",

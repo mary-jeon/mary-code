@@ -1,20 +1,21 @@
-# 안전망 — 기록 파일은 ~/.claude/mary/ 에 생성되므로 원래 여기 없다.
-# 실수로 저장소 안에서 하네스를 돌렸을 때를 대비한 것.
+# Safety net — runtime records are created in ~/.claude/mary/, never here.
+# This guards against accidentally running the harness inside the repository.
 RULES.md
 FAILLOG.md
 _work.md
 _work-*.md
 approvals.jsonl
 
-# 로컬 전용 Claude 설정 — 머신별 권한이 담기므로 저장소에 올리지 않는다.
-# (사용자 전역 gitignore로도 무시되지만, 저장소 자체를 자기방어적으로 만든다.)
+# Local-only Claude settings — per-machine permissions never go in the repository.
+# (Also ignored by the user's global gitignore; this keeps the repo self-defending.)
 .claude/settings.local.json
 
-# 로컬 전용 작업 폴더·문서 — 공개 저장소에 올리지 않는다.
+# Local-only working folders and documents — never published.
 talk/
 Mary-Code-Canonical.md
+_submission-draft.md
 
-# 편집기
+# Editors
 .obsidian/
 
 # OS
