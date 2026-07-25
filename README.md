@@ -1,0 +1,320 @@
+# Mary Code
+
+> **Rv.0 / plugin 0.1.0 · Experimental · Claude Code**
+
+**AI sounds convincing even when it is wrong.**
+
+Mary is a task harness that keeps an AI's uncertain output inside a safer operating loop: reversible execution, observable verification, explicit approval for irreversible actions, and records that survive across sessions.
+
+Mary does not change the model. It changes how work is framed, executed, checked, and recorded so that one plausible-but-wrong judgment is less likely to become the bottleneck for an entire task.
+
+## What is in Rv.0
+
+Rv.0 is the first public release of Mary as a Claude Code plugin: a workflow skill plus an execution layer that enforces part of the workflow with hooks.
+
+- A `PreToolUse` gate asks for permission before recognized irreversible shell actions run.
+- `PostToolUse` and `PostToolUseFailure` hooks connect an approval request to the observed execution result.
+- A `PermissionDenied` hook closes an approval as `denied` when the host reports the denial.
+- A `SessionStart` hook reports approvals whose result was never recorded as `unknown`; they are never treated as failed or automatically retried.
+- An append-only approval ledger stores what the user was shown, a normalized request hash, and the observed result. Only gated calls are recorded, and tool response bodies are never stored — command output can contain secrets.
+- A bundled read-only `mary-critic` agent gives the adversarial-review stage a fixed, tool-restricted reviewer profile.
+- A `mary-stats.js` auditor recomputes failure counters and rule-promotion candidates deterministically, instead of trusting the model's arithmetic.
+- Multiple active tasks use separate `_work-<slug>.md` files while sharing one `RULES.md` and one `FAILLOG.md`.
+
+The next major feature is a decision-retrace engine. When a premise is invalidated, it will reopen only the decisions that depended on that premise instead of restarting the entire task. The specification exists, but the engine is not implemented yet.
+
+## How Mary works
+
+Mary runs applicable work through six numbered stages. Stage 4 includes the approval and execution point for irreversible actions.
+
+```text
+0. Risk check       List irreversible actions; separate verifiable claims from judgment
+1. Specification    Define the goal, completion conditions, exclusions, and checks
+2. Alternatives     Compare distinct approaches and record how each could fail
+3. Safe execution   Produce reversible work first; hold irreversible actions
+4. Verification     Verify → challenge → fix → re-verify
+   4.5 Execution    Show target and scope → approve → re-check state → execute → observe
+5. Learning log     Record outcomes and raise repeated failures as rule candidates
+```
+
+Mary distinguishes two kinds of conclusions:
+
+- **Verifiable claims** must be checked with observable evidence such as execution, tests, measurements, diffs, primary sources, or confirmation from an authorized reviewer.
+- **Judgment domains** such as design, strategy, and preference are not presented as objectively verified. Mary states the recommendation, its key premise, what would overturn it, and who owns the remaining value decision.
+
+A critique from another LLM is a separate perspective, not independent verification. Evidence must be inspectable outside the model's own claims. Mary also checks separately whether evidence exists and whether it actually supports the current claim.
+
+The canonical failure keys and stage mappings are documented in [`skills/mary/LAYERS.md`](./skills/mary/LAYERS.md).
+
+## When to use it
+
+After installation, invoke the plugin skill directly in Claude Code:
+
+```text
+/mary-code:mary
+```
+
+A direct invocation runs the full procedure regardless of task size.
+
+Mary can also activate automatically when the request is:
+
+- irreversible or difficult to undo, such as deletion, overwrite, external sending, deployment, or a business-system write;
+- multi-step, where an early judgment affects later results; or
+- fact-dependent, where statutes, figures, specifications, or other factual claims determine the outcome.
+
+Automatic activation depends on model judgment and can be missed. Use `/mary-code:mary` when you need the workflow with certainty.
+
+Mary is not intended for simple one-shot questions, explanations, translations, or lookups. Applying a heavy procedure to every request would make the harness easier to bypass and harder to use.
+
+### Task grades
+
+| Grade | Applies to | Handling |
+|---|---|---|
+| **Standard** | Reversible, lower-impact work | Claude proceeds autonomously and performs the necessary verification. Automatic activation may compress exploration and presentation, but not verification or approval gates. |
+| **Guarded** | Irreversible actions; legal, employment, tax, or high-cost work; hard-to-reverse design decisions | Verifiable claims require observable evidence. Important judgments and irreversible actions require user confirmation. |
+
+Guarded work does not reduce exploration. It raises the evidence and approval required before a decision is finalized.
+
+## Installation
+
+Mary requires:
+
+- a recent version of **Claude Code** with skills-directory plugin support; and
+- **Node.js**, because the hook scripts run with `node`.
+
+### macOS / Linux
+
+```bash
+git clone https://github.com/a01078794-arch/mary-code.git ~/.claude/skills/mary-code
+claude plugin validate --strict ~/.claude/skills/mary-code
+```
+
+### Windows PowerShell
+
+```powershell
+git clone https://github.com/a01078794-arch/mary-code.git "$HOME\.claude\skills\mary-code"
+claude plugin validate --strict "$HOME\.claude\skills\mary-code"
+```
+
+A folder under `~/.claude/skills/` that contains `.claude-plugin/plugin.json` loads on the next session as a skills-directory plugin. Mary appears as `mary-code@skills-dir` and its skill is namespaced as `/mary-code:mary`.
+
+If you use **Code → Download ZIP** instead of Git, extract the complete repository and rename the extracted folder to `mary-code` so that this file exists:
+
+```text
+~/.claude/skills/mary-code/.claude-plugin/plugin.json
+```
+
+Restart Claude Code after the first installation. After an update, restart or run `/reload-plugins` so changes to hooks and other plugin components are loaded.
+
+### Updating
+
+macOS / Linux:
+
+```bash
+git -C ~/.claude/skills/mary-code pull --ff-only
+```
+
+Windows PowerShell:
+
+```powershell
+git -C "$HOME\.claude\skills\mary-code" pull --ff-only
+```
+
+Then restart Claude Code or run `/reload-plugins`.
+
+## What the irreversible-action gate actually enforces
+
+Mary has two protection layers, and they are not the same thing:
+
+| Layer | Role |
+|---|---|
+| **Workflow rule** | The skill instructs Claude to hold every irreversible action until the target, scope, rollback path, and user approval are clear. |
+| **Hook gate** | The `PreToolUse` hook independently asks before the specific actions it can recognize in registered tool calls. |
+
+The Rv.0 hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
+
+- file deletion, including non-recursive forms (`rm`, `del`, `Remove-Item`, `find -delete`, `shred`);
+- `git push`, destructive Git reset/clean operations, forced branch deletion, or `--no-verify` bypasses;
+- GitHub repository or release deletion through `gh`;
+- destructive SQL patterns;
+- disk overwrite and truncation commands;
+- HTTP commands that send data;
+- package publication and selected deployment commands;
+- shell-wrapper and encoding invocations that would launder a command past pattern inspection (`bash -c`, `powershell -EncodedCommand`, piping a download into a shell, `eval`) — the wrapped content cannot be judged, so the wrapping itself is treated as "cannot judge → ask"; or
+- edits to Mary's own settings, manifest, hook registration, or hook scripts — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, or a PowerShell write cmdlet.
+
+The Bash self-protection check is a heuristic. No string-level inspection reads full shell semantics; it exists to make an obvious bypass visible, not to make one impossible.
+
+For recognized actions, the hook returns Claude Code's native `ask` decision. It does not silently approve the action and does not reuse a previous approval.
+
+For unrecognized commands and ordinary file writes, the hook returns `defer`, which hands the decision back to Claude Code's normal permission system. `defer` does **not** mean the hook verified the action as safe.
+
+The gate is fail-closed for malformed hook input: empty input, invalid JSON, a missing tool name, or an unreadable Bash command produces `ask` rather than approval. This is not a universal deny-by-default policy. Tools outside the registered matcher and semantic risks that do not match the implemented patterns remain outside the hook's enforcement coverage.
+
+### Approval ledger and `unknown` results
+
+When the gate asks, Mary appends an `asked` event to `~/.claude/mary/approvals.jsonl`. The record keeps:
+
+- the exact explanation shown to the user;
+- the tool request;
+- a normalized request hash used for machine matching; and
+- the later result, when one is observed: `succeeded`, `failed`, or `denied`.
+
+The result recorder only writes when a matching open `asked` entry exists. Tool calls that never passed the gate are not logged, so the ledger stays an approval record rather than a growing plaintext log of every command output.
+
+If no matching result arrives, the approval remains open. At the next session start Mary reports it as `unknown`—not failed—and instructs Claude to inspect the real side effect before considering any retry. This reduces duplicate effects from retrying an operation that may already have succeeded. A user denial is closed as `denied` only when the host emits the `PermissionDenied` event; if it does not, the denial also remains `unknown`.
+
+## Enforcement boundary — read this before trusting the gate
+
+A normal skills-directory installation is **not a trust boundary**.
+
+The agent may be able to edit files under `~/.claude/skills/mary-code/`, change user or project settings, or disable hooks. Self-protection makes an obvious edit to Mary's enforcement files visible, but it cannot make user-writable files tamper-proof. Treat the default installation as a useful approval checkpoint, not as administrator-enforced isolation.
+
+A hardened deployment requires both:
+
+1. plugin files and their distribution source to be controlled by an administrator and inaccessible to the agent; and
+2. the exact managed plugin ID to be force-enabled in Claude Code managed settings, optionally with `allowManagedHooksOnly`.
+
+Example shape for an administrator-managed marketplace deployment:
+
+```json
+{
+  "enabledPlugins": {
+    "mary-code@your-managed-marketplace": true
+  },
+  "allowManagedHooksOnly": true
+}
+```
+
+Do **not** substitute `mary-code@skills-dir` and assume that the user-writable checkout has become hardened. This repository does not currently provide a one-command managed deployment.
+
+Managed settings locations are:
+
+- Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
+- Linux and WSL: `/etc/claude-code/managed-settings.json`
+- macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
+
+`allowManagedHooksOnly` blocks user, project, and other non-managed plugin hooks. Enable it only after considering every hook your environment requires.
+
+Even a properly managed installation covers only the hook events, tool names, and action patterns that Mary observes. Deciding whether a task is multi-step or whether a factual judgment controls the outcome remains a semantic decision that no pattern-only dispatcher can fully enforce.
+
+For Claude Code's current plugin and managed-settings behavior, see the official [plugin documentation](https://code.claude.com/docs/en/plugins), [plugin reference](https://code.claude.com/docs/en/plugins-reference), and [configuration reference](https://code.claude.com/docs/en/configuration).
+
+## State and record files
+
+Mary keeps runtime state outside the repository in `~/.claude/mary/`. Files are created as needed.
+
+| File | Role |
+|---|---|
+| `RULES.md` | Approved standing rules and previously confirmed facts. There is one shared file. |
+| `FAILLOG.md` | Observed failures, rejected counterexamples, counters, task IDs, and rule-promotion status. There is one shared file. |
+| `_work-<slug>.md` | One active task record per workstream. Multiple files may exist at the same time. Completed task files are removed; paused, blocked, failed, or abandoned records remain. |
+| `approvals.jsonl` | Append-only approval and execution-result ledger written by the hooks. |
+
+These files stay on the user's computer and are not pushed to this repository.
+
+## How Mary learns from failures
+
+Mary does not discard a failure when a task ends.
+
+1. It records the failure, evidence, canonical key, scope, and stable `task_id` in `FAILLOG.md`.
+2. It counts a task exactly once, even if the same task spans several sessions or changes terminal state.
+3. When the same failure key is reproduced in two different task IDs, it becomes a rule candidate.
+4. Mary shows the proposed one-line rule and its two supporting cases.
+5. Only a rule the user approves is added to `RULES.md`.
+6. A bad standing rule can later be revised or removed.
+
+Rejected counterexamples are stored separately and never count toward promotion. Promotion scope is limited to the scopes actually observed; it is not silently generalized to all work.
+
+> `FAILLOG.md` describes failures observed while Mary was active. It is not a complete estimate of every failure the model produced.
+
+## Repository structure
+
+The plugin components must stay together.
+
+| File | Role |
+|---|---|
+| `.claude-plugin/plugin.json` | Plugin identity, version, component paths, and metadata |
+| `skills/mary/SKILL.md` | Mary's executable task procedure |
+| `skills/mary/LAYERS.md` | Canonical failure keys and aliases |
+| `agents/mary-critic.md` | Read-only adversarial reviewer used by stage 4-2 |
+| `scripts/mary-stats.js` | Read-only auditor that recomputes counters and promotion candidates |
+| `hooks/hooks.json` | Registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, and `SessionStart` |
+| `scripts/hooks/mary-irreversible-gate.js` | Recognizes gated actions and returns `ask` or `defer` |
+| `scripts/hooks/mary-outcome-recorder.js` | Records the observed result for a matching approval |
+| `scripts/hooks/mary-session-report.js` | Reports unresolved approvals as `unknown` at session start |
+| `scripts/hooks/lib/ledger.js` | Normalizes requests and maintains the append-only ledger |
+| `tests/gate.test.js` | Regression tests for the gate, ledger, result binding, and session report |
+| `tests/stats.test.js` | Regression tests for the counter auditor and promotion-candidate logic |
+
+## Design principles
+
+- **Think freely, commit strictly.** Exploration stays open; consequential conclusions require evidence.
+- **Keep reversible work autonomous.** Escalate ambiguity, high impact, and hard-to-reverse decisions—not every ordinary step.
+- **Separate fact from judgment.** Verify facts; expose the premises and reversal conditions behind judgment.
+- **Treat model critique as perspective, not proof.** Independent evidence comes from execution, tests, measurements, primary sources, and authorized reviewers.
+- **Observe effects before reporting success.** A missing result is `unknown`, not automatically failure.
+- **Sessions are disposable; files are assets.** Work state and failure history survive session boundaries.
+- **Let bad rules come back down.** A promoted rule is not permanent truth.
+
+## Current limitations
+
+- Automatic activation can be missed or applied unnecessarily.
+- The workflow asks Claude to draft the specification first, which can anchor the user to the model's initial framing.
+- A mechanism that confirms the user's key conditions before Claude recommends an option in Guarded work is not implemented yet.
+- The decision-retrace engine is specified but not implemented.
+- The hook recognizes a defined set of tools and patterns; it does not mediate every possible tool, command, external send, or business-system write.
+- The Bash self-protection check pairs a protected-path mention with a write indicator. It is a visibility heuristic, not a parser; a sufficiently indirect shell command can still avoid it.
+- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented. A denial that is never observed stays open and is reported as `unknown` at the next session start.
+- A separate LLM reviewer may share the generator's biases. It is not a substitute for observable evidence.
+
+## Development status
+
+**Current version: Rv.0 / plugin 0.1.0 · Experimental**
+
+Working now:
+
+- six-stage task procedure;
+- Standard and Guarded task grades;
+- evidence verification → counterexample → fix → re-verification;
+- automatic matching to the user's language;
+- multiple concurrent `_work-<slug>.md` records;
+- failure logging, counters, and user-approved rule promotion;
+- recognized irreversible-action gating through `PreToolUse`, including shell-wrapper and encoding laundering patterns;
+- approval-to-result binding through `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied`;
+- gated-calls-only ledger recording, with no tool response bodies stored;
+- unresolved approval reporting through `SessionStart`;
+- a bundled read-only critic agent and a deterministic counter auditor; and
+- 65 regression checks across the gate, ledger, auditor, and session reporting.
+
+In development:
+
+- **Decision retrace engine** — specification complete, implementation in progress.
+
+Before a stable release:
+
+- validate Mary on 5–10 real product, legal, and research tasks;
+- confirm that a fresh session follows the same procedure;
+- verify installation and execution on macOS;
+- confirm empirically whether the host emits `PermissionDenied` on a manual denial;
+- measure missed and unnecessary automatic activation;
+- expand regression coverage beyond recognized shell patterns;
+- publish an English canonical `SKILL.md` — the workflow text is currently Korean, which the model follows in any language, but global users should be able to audit the procedure they are trusting; and
+- test the decision-retrace engine against its counterexample scenarios.
+
+Later:
+
+- installation methods for Codex and ChatGPT;
+- a read-only critique agent;
+- evidence-based criteria for ending and restarting long sessions; and
+- dedicated image and PDF verification procedures.
+
+## Support Mary
+
+If Mary helps with real work, consider giving the repository a ⭐ **Star**.
+
+Stars are optional and do not affect installation, features, or support.
+
+## License
+
+Mary Code is released under the [MIT License](./LICENSE).
