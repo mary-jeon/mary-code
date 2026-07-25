@@ -10,7 +10,7 @@
 const assert = require('assert');
 const path = require('path');
 
-const { parseFaillog, parseWork, analyze } =
+const { parseFaillog, parseWork, parseReceipts, analyze } =
   require(path.join(__dirname, '..', 'scripts', 'mary-stats.js'));
 
 let pass = 0, fail = 0;
@@ -147,6 +147,65 @@ t('duplicate task_id → warning', () => {
   const b = parseWork('---\nstatus: active\ncounted_status: none\ntask_id: 20260720-dup-006\n---\n', '_work-b.md');
   const rr = analyze({ faillog: fl, works: [a, b] });
   assert.ok(rr.warnings.some(x => x.includes('duplicate')));
+});
+
+console.log('\n[verification receipts — SKILL 4-4, the auditor is the consumer]');
+const RECEIPT_OK = '## Receipt\n```json\n' + JSON.stringify({
+  receipt: 'verification', task_id: '20260725-x-001',
+  items: [{ check: 'tests pass', cmd: 'node tests/gate.test.js', observed: '52 passed / 0 failed', pass: true }],
+}) + '\n```\n';
+const RECEIPT_FAILING = '```json\n' + JSON.stringify({
+  receipt: 'verification', task_id: '20260725-x-002',
+  items: [{ check: 'render ok', cmd: 'open page', observed: 'console error', pass: false }],
+}) + '\n```\n';
+const RECEIPT_INVALID = '```json\n' + JSON.stringify({
+  receipt: 'verification', task_id: '20260725-x-003',
+  items: [{ check: 'claimed without running anything', pass: true }],
+}) + '\n```\n';
+
+t('a well-formed receipt parses clean', () => {
+  const rs = parseReceipts(RECEIPT_OK);
+  assert.strictEqual(rs.length, 1);
+  assert.deepStrictEqual(rs[0].errors, []);
+  assert.strictEqual(rs[0].failing, 0);
+});
+t('ordinary json blocks are not receipts', () => {
+  assert.strictEqual(parseReceipts('```json\n{"a":1}\n```').length, 0);
+});
+t('a failing item is reported and blocks completed', () => {
+  const w = parseWork('---\nstatus: active\ncounted_status: none\ntask_id: 20260725-x-002\n---\n' + RECEIPT_FAILING, '_work-r2.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('failing item')));
+});
+t('a receipt item without cmd/observed is invalid — that is the phantom-execution shape', () => {
+  const w = parseWork('---\nstatus: active\ncounted_status: none\ntask_id: 20260725-x-003\n---\n' + RECEIPT_INVALID, '_work-r3.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('receipt invalid')));
+});
+t('a valid receipt adds no warnings', () => {
+  const w = parseWork('---\nstatus: active\ncounted_status: none\ntask_id: 20260725-x-001\n---\n' + RECEIPT_OK, '_work-r1.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('receipt')));
+});
+t('a receipt-like block with broken JSON is loud, not silent', () => {
+  const rs = parseReceipts('```json\n{ "receipt": "verification", broken\n```');
+  assert.strictEqual(rs.length, 1);
+  assert.ok(rs[0].errors.some(e => e.includes('not valid JSON')));
+});
+t('fence-case and spacing variants still parse (```JSON, ``` json)', () => {
+  const body = JSON.stringify({ receipt: 'verification', items: [{ check: 'c', cmd: 'x', observed: 'y', pass: true }] });
+  assert.strictEqual(parseReceipts('```JSON\n' + body + '\n```').length, 1);
+  assert.strictEqual(parseReceipts('``` json \n' + body + '\n```').length, 1);
+});
+t('completed without any receipt is reported — the most likely failure is not writing one', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-004\ngrade: Guarded\n---\nno receipt here\n', '_work-r4.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('no verification receipt')));
+});
+t('completed with a valid receipt is not flagged as missing', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-005\n---\n' + RECEIPT_OK, '_work-r5.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('no verification receipt')));
 });
 
 console.log(`\n${pass} passed / ${fail} failed\n`);

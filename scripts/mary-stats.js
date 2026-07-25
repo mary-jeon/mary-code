@@ -91,7 +91,53 @@ function parseWork(text, file) {
     const m = text.match(new RegExp(`^${k}\\s*:\\s*(.+)$`, 'm'));
     return m ? m[1].trim() : null;
   };
-  return { file, status: grab('status'), counted: grab('counted_status'), task: grab('task_id') };
+  return { file, status: grab('status'), counted: grab('counted_status'), task: grab('task_id'),
+           grade: grab('grade'), receipts: parseReceipts(text) };
+}
+
+/* ── Verification receipts (SKILL stage 4-4) ─────────────────────── */
+
+/**
+ * A verification receipt is machine-readable evidence attached at completion:
+ * a fenced ```json block with { "receipt": "verification", "items": [...] },
+ * each item binding a claim to the command that ran and what it printed.
+ * Prose "I checked it" is what L11 phantom-execution looks like from outside.
+ * This auditor is the consumer that keeps the receipt from being ritual:
+ * an invalid or failing receipt is reported, and stage 5 must not close the
+ * task as completed while one is reported.
+ */
+function parseReceipts(text) {
+  const receipts = [];
+  // Fence matching is case- and whitespace-tolerant (```JSON, ``` json …) —
+  // a receipt that silently fails to parse is the most likely failure mode of
+  // the whole mechanism, so nothing here is allowed to fail silently.
+  const re = /```[^\S\n]*json[^\S\n]*\r?\n([\s\S]*?)```/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    let obj;
+    try { obj = JSON.parse(m[1]); } catch {
+      // Unparseable block that LOOKS like a receipt → loud, not silent.
+      if (/"receipt"\s*:\s*"verification"/.test(m[1])) {
+        receipts.push({ task: null, items: 0, errors: ['receipt block is not valid JSON'], failing: 0 });
+      }
+      continue;
+    }
+    if (!obj || obj.receipt !== 'verification') continue;
+    const errors = [];
+    if (!Array.isArray(obj.items) || obj.items.length === 0) {
+      errors.push('items missing or empty');
+    } else {
+      obj.items.forEach((it, i) => {
+        for (const k of ['check', 'cmd', 'observed']) {
+          if (!it || !it[k] || !String(it[k]).trim()) errors.push(`items[${i}].${k} empty`);
+        }
+        if (!it || typeof it.pass !== 'boolean') errors.push(`items[${i}].pass is not a boolean`);
+      });
+    }
+    const failing = Array.isArray(obj.items) ? obj.items.filter(it => it && it.pass === false).length : 0;
+    receipts.push({ task: obj.task_id || null, items: Array.isArray(obj.items) ? obj.items.length : 0, errors, failing });
+  }
+  return receipts;
 }
 
 /* ── Analysis ────────────────────────────────────────────────────── */
@@ -147,6 +193,16 @@ function analyze({ faillog, works }) {
     if (expect && w.counted && w.counted !== expect && w.counted !== 'none') {
       report.warnings.push(`${w.file}: status=${w.status} but counted_status=${w.counted} (expected: ${expect} or none)`);
     }
+    for (const rc of (w.receipts || [])) {
+      for (const e of rc.errors) report.warnings.push(`${w.file}: verification receipt invalid — ${e}`);
+      if (rc.failing) report.warnings.push(`${w.file}: verification receipt has ${rc.failing} failing item(s) — not closable as completed`);
+    }
+    // The most likely receipt failure is not writing one at all (SKILL 4-4
+    // requires it for Guarded work and whenever 4-1 ran). Detectable only at
+    // the completed boundary — an active task legitimately has none yet.
+    if (w.status === 'completed' && !(w.receipts || []).length) {
+      report.warnings.push(`${w.file}: status=completed but no verification receipt found (SKILL 4-4)`);
+    }
   }
 
   return report;
@@ -173,7 +229,12 @@ function main() {
   console.log('recorded counters:', JSON.stringify(r.counters));
   console.log('body recount     :', `failures ${r.recount.failures} (lower bound) · rejected ${r.recount.rejected} (lower bound)`);
   console.log('\nactive _work files:', r.works.length ? '' : 'none');
-  for (const w of r.works) console.log(`  - ${w.file} · status=${w.status} · counted=${w.counted} · task=${w.task}`);
+  for (const w of r.works) {
+    const rc = (w.receipts && w.receipts.length)
+      ? ` · receipts: ${w.receipts.map(x => `${x.items} item(s)${x.errors.length ? ' INVALID' : x.failing ? ` ${x.failing} FAILING` : ' ok'}`).join(', ')}`
+      : '';
+    console.log(`  - ${w.file} · status=${w.status} · counted=${w.counted} · task=${w.task}${rc}`);
+  }
   console.log('\npromotion candidates (2+ distinct tasks, /other excluded):', r.candidates.length ? '' : 'none');
   for (const cd of r.candidates) console.log(`  - ${cd.key} · tasks: ${cd.tasks.join(', ')} · scopes: ${cd.scopes.join(', ') || '?'}`);
   console.log('\nwarnings:', r.warnings.length ? '' : 'none');
@@ -182,4 +243,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { parseFaillog, parseWork, analyze };
+module.exports = { parseFaillog, parseWork, parseReceipts, analyze };

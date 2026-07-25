@@ -20,6 +20,15 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/mary-outcome-recorder.js\""
           }
         ]
+      },
+      {
+        "matcher": "WebFetch|WebSearch|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/mary-trifecta-sentinel.js\""
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -40,6 +49,17 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/mary-outcome-recorder.js\""
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/mary-approval-notifier.js\""
           }
         ]
       }

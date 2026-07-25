@@ -15,6 +15,8 @@
  * State transitions come from folding the log:
  *   asked → succeeded | failed        (written by the outcome hook)
  *   asked → denied                    (user denial, when the host emits PermissionDenied)
+ *   asked → reconciled                (a human observed the real side effects afterwards and
+ *                                      closed it via scripts/mary-reconcile.js, evidence attached)
  *   asked → (nothing arrives) = unknown  (session died, or the denial was never observed)
  *
  * unknown means "we do not know" — not "it did not run". It must never be used as
@@ -75,24 +77,44 @@ function readAll() {
 
 /**
  * Fold the log to find approvals that never received an outcome.
- * If the same request_hash was asked multiple times, only as many are considered
- * closed as there are outcomes.
+ *
+ * Matching rules (each closes at most ONE open asked entry):
+ *  - Chronological, floor at zero: a closing event only closes an asked entry
+ *    that is already open at that point in the log. A surplus close is dropped,
+ *    never banked — otherwise a stray extra outcome would silently pre-pay the
+ *    NEXT time the same command is asked, and that approval could end unknown
+ *    without ever being reported.
+ *  - succeeded/failed/denied bind by hash AND session: an outcome observed in
+ *    session B must not close session A's still-unknown approval for the same
+ *    command. If the outcome has no session, or only session-less asked entries
+ *    exist, it falls back to hash-only (old ledgers keep folding).
+ *  - reconciled binds by hash only: a human observing side effects is not
+ *    scoped to the session that asked.
  */
 function openApprovals() {
-  const asked = [];
-  const closed = new Map();
+  const entries = [];               // asked entries in file order
+  const byHash = new Map();         // hash -> asked entries (same order)
+  const CLOSERS = new Set(['succeeded', 'failed', 'denied', 'reconciled']);
   for (const r of readAll()) {
-    if (r.event === 'asked') asked.push(r);
-    else if (r.event === 'succeeded' || r.event === 'failed' || r.event === 'denied') {
-      closed.set(r.request_hash, (closed.get(r.request_hash) || 0) + 1);
+    if (r.event === 'asked') {
+      const e = { rec: r, closed: false };
+      entries.push(e);
+      if (!byHash.has(r.request_hash)) byHash.set(r.request_hash, []);
+      byHash.get(r.request_hash).push(e);
+    } else if (CLOSERS.has(r.event)) {
+      const q = byHash.get(r.request_hash);
+      if (!q) continue;
+      let target;
+      if (r.event !== 'reconciled' && r.session) {
+        target = q.find(e => !e.closed && e.rec.session === r.session)
+              || q.find(e => !e.closed && !e.rec.session);
+      } else {
+        target = q.find(e => !e.closed);
+      }
+      if (target) target.closed = true;
     }
   }
-  const remaining = new Map(closed);
-  return asked.filter(a => {
-    const n = remaining.get(a.request_hash) || 0;
-    if (n > 0) { remaining.set(a.request_hash, n - 1); return false; }
-    return true;
-  });
+  return entries.filter(e => !e.closed).map(e => e.rec);
 }
 
 module.exports = { canonicalize, requestHash, append, readAll, openApprovals, LEDGER, MARY_DIR };

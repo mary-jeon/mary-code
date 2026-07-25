@@ -56,7 +56,11 @@ function main() {
       const hash = requestHash(p.tool_name, p.tool_input);
 
       // No open asked entry → this call never went through the gate. Do not record.
-      const isOpen = openApprovals().some(a => a.request_hash === hash);
+      // Session-aware: an outcome from this session must not close another
+      // session's still-unknown approval for the same command (the ledger fold
+      // applies the same rule when matching).
+      const isOpen = openApprovals().some(a => a.request_hash === hash &&
+        (!p.session_id || !a.session || a.session === p.session_id));
       if (!isOpen) return process.exit(0);
 
       append({

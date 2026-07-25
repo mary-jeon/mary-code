@@ -1,6 +1,6 @@
-# Mary Code
+# Mary
 
-> **Rv.0 / plugin 0.2.0 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.3.0 · Experimental · Claude Code**
 >
 > [English](./README.md) (정본) · **한국어**
 >
@@ -63,7 +63,7 @@ Mary는 결론을 두 종류로 구분합니다:
 설치 후 Claude Code에서 직접 호출:
 
 ```text
-/mary-code:mary
+/mary
 ```
 
 명시 호출은 작업 크기와 무관하게 전체 절차를 돌립니다.
@@ -74,7 +74,7 @@ Mary는 결론을 두 종류로 구분합니다:
 - 다단계 작업 (초기 판단이 이후 결과에 영향)
 - 사실 의존 작업 (법령·수치·규격 같은 사실 판정이 결과를 좌우)
 
-자동 발동은 모델 판단에 의존하므로 누락될 수 있습니다. 확실히 필요하면 `/mary-code:mary`를 치세요.
+자동 발동은 모델 판단에 의존하므로 누락될 수 있습니다. 확실히 필요하면 `/mary`를 치세요.
 
 단발 질문·설명·번역·조회에는 쓰지 않습니다. 모든 요청에 무거운 절차를 돌리면 하네스는
 우회되기 쉬워지고 쓰기 어려워집니다.
@@ -98,26 +98,26 @@ Guarded는 탐색을 줄이지 않습니다. 결정 확정 전에 요구되는 �
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/a01078794-arch/mary-code.git ~/.claude/skills/mary-code
-claude plugin validate --strict ~/.claude/skills/mary-code
+git clone https://github.com/mary-jeon/mary-code.git ~/.claude/skills/mary
+claude plugin validate --strict ~/.claude/skills/mary
 ```
 
 ### Windows PowerShell
 
 ```powershell
-git clone https://github.com/a01078794-arch/mary-code.git "$HOME\.claude\skills\mary-code"
-claude plugin validate --strict "$HOME\.claude\skills\mary-code"
+git clone https://github.com/mary-jeon/mary-code.git "$HOME\.claude\skills\mary"
+claude plugin validate --strict "$HOME\.claude\skills\mary"
 ```
 
 `~/.claude/skills/` 아래에 `.claude-plugin/plugin.json`이 있는 폴더는 다음 세션에서
-스킬 디렉터리 플러그인으로 로드됩니다. `mary-code@skills-dir`로 나타나고 스킬은
-`/mary-code:mary`로 네임스페이스됩니다.
+스킬 디렉터리 플러그인으로 로드됩니다. `mary@skills-dir`로 나타나고 스킬은
+`/mary:mary`로 네임스페이스됩니다 (충돌이 없으면 `/mary`로 호출).
 
-Git 대신 **Code → Download ZIP**을 쓰면 전체 저장소를 풀고 폴더 이름을 `mary-code`로 바꿔
+Git 대신 **Code → Download ZIP**을 쓰면 전체 저장소를 풀고 폴더 이름을 `mary`로 바꿔
 다음 파일이 존재하게 하세요:
 
 ```text
-~/.claude/skills/mary-code/.claude-plugin/plugin.json
+~/.claude/skills/mary/.claude-plugin/plugin.json
 ```
 
 첫 설치 후 Claude Code를 재시작하세요. 업데이트 후에는 재시작하거나 `/reload-plugins`를 실행하세요.
@@ -127,13 +127,13 @@ Git 대신 **Code → Download ZIP**을 쓰면 전체 저장소를 풀고 폴더
 macOS / Linux:
 
 ```bash
-git -C ~/.claude/skills/mary-code pull --ff-only
+git -C ~/.claude/skills/mary pull --ff-only
 ```
 
 Windows PowerShell:
 
 ```powershell
-git -C "$HOME\.claude\skills\mary-code" pull --ff-only
+git -C "$HOME\.claude\skills\mary" pull --ff-only
 ```
 
 그 후 Claude Code 재시작 또는 `/reload-plugins`.
@@ -147,11 +147,17 @@ Mary의 보호층은 둘이고, 서로 다릅니다:
 | **워크플로 규칙** | 스킬이 Claude에게 모든 비가역 행동을 대상·범위·복구 경로·승인이 확보될 때까지 보류하라고 지시 |
 | **훅 게이트** | `PreToolUse` 훅이 등록된 도구 호출에서 인식 가능한 행동에 대해 독립적으로 승인을 요청 |
 
+게이트의 역할은 **분류가 아니라 사람에게 라우팅하는 것**입니다. 어떤 패턴 집합도 셸 의미론을
+다 읽지 못하므로, 목표는 "모든 위험 명령 인식"이 아닙니다 — 그것은 불가능합니다. 목표는
+인식된 위험과 **판정할 수 없는 모든 것**을 사람에게 넘기고, 어떤 패턴도 자동 허용을 만들지
+않는 것입니다. 실제 방어선은 사람이 누르는 승인 버튼이고, 그것은 패턴 기반이 아니라서
+인코딩 우회가 통하지 않습니다 — 패턴은 언제 사람이 봐야 하는지를 정할 뿐입니다.
+
 Rv.0 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며 다음을 인식하면 승인을 요청합니다:
 
-- 파일 삭제 — 비재귀 포함 (`rm`, `del`, `Remove-Item`, `find -delete`, `shred`)
+- 파일 삭제 — 비재귀 포함 (`rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`)
 - `git push`, 파괴적 Git reset/clean, 브랜치 강제 삭제, `--no-verify` 우회
-- `gh`를 통한 GitHub 저장소·릴리스 삭제
+- `gh`를 통한 GitHub 저장소·릴리스·gist 삭제, DELETE 메서드의 `gh api` 호출
 - 파괴적 SQL 패턴
 - 디스크 덮어쓰기·절단 명령
 - 데이터를 전송하는 HTTP 명령
@@ -159,8 +165,9 @@ Rv.0 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며
 - 패턴 검사를 세탁할 수 있는 셸 래퍼·인코딩 호출 (`bash -c`, `powershell -EncodedCommand`,
   다운로드를 셸에 파이프, `eval`) — 감싼 내용을 판정할 수 없으므로 감싸는 행위 자체를
   "판정 불가 → 승인 요청"으로 처리
-- Mary 자신의 설정·매니페스트·훅 등록·훅 스크립트 수정 — Write 계열은 경로로,
-  Bash는 보호 경로 언급 + 쓰기 흔적(리다이렉트, `sed -i`, `tee`, `cp`/`mv`, PowerShell 쓰기 cmdlet) 결합으로
+- Mary 자신의 설정·매니페스트·훅 등록·훅 스크립트·승인 원장(`approvals.jsonl`) 수정 — Write 계열은 경로로,
+  Bash는 보호 경로 언급 + 쓰기 흔적(리다이렉트, `sed -i`, `tee`, `cp`/`mv`, PowerShell 쓰기 cmdlet) 결합으로.
+  조용히 고칠 수 있는 원장은 증거이기를 멈춥니다
 
 Bash 자기 보호 검사는 휴리스틱입니다. 어떤 문자열 검사도 셸 의미론을 다 읽지 못합니다 —
 명백한 우회를 눈에 보이게 만드는 장치이지, 우회를 불가능하게 만드는 장치가 아닙니다.
@@ -175,6 +182,22 @@ Bash 자기 보호 검사는 휴리스틱입니다. 어떤 문자열 검사도 �
 Bash 명령은 승인이 아니라 `ask`를 냅니다. 이것이 보편적 기본 거부 정책은 아닙니다 — 등록된
 matcher 밖의 도구와 구현된 패턴에 걸리지 않는 의미론적 위험은 훅의 집행 범위 밖입니다.
 
+게이트가 물을 때, 사용자가 승인할 문구에 두 가지 최선-노력 맥락 경고가 덧붙을 수 있습니다:
+
+- **교차 세션 가시성.** 같은 작업 디렉터리를 향한 **다른 세션**의 미결 승인을 표시합니다 —
+  그 결과가 unknown이라는 것은 방금 검토한 상태가 이미 달라졌을 수 있다는 뜻이기 때문입니다.
+  원장을 세션별로 쪼개지 않고 공유하는 이유가 정확히 이것입니다: 격리는 충돌을 숨기고,
+  공유는 충돌을 보이게 합니다. (대조는 cwd 문자열 기준 — 같은 원격의 서로 다른 클론은 못 봅니다.)
+- **lethal-trifecta 신호.** `mary-trifecta-sentinel.js`(WebFetch·WebSearch·fetch형 Bash를 관측하는
+  `PostToolUse` 훅 — **거부된** fetch는 아무것도 읽지 않았으므로 신호를 오염시키지 않도록
+  실행된 호출에만 발화하는 PostToolUse를 씁니다)가 세션의 비신뢰 외부 콘텐츠 유입을 기록해
+  두고, 같은 세션이 나중에 **외부 전송** — 또는 게이트가 읽을 수 없는 래핑·인코딩 명령,
+  그것이 전송일 수 있으므로 — 의 승인을 요청하면 게이트가 trifecta 경고를 덧붙입니다.
+  세 다리 중 둘만 관측 가능합니다 — 민감정보 접근은 도구 호출에서 신뢰성 있게 감지할 수
+  없으므로, 감지한다고 주장하지 않습니다.
+
+두 경고 모두 가시성일 뿐입니다: 결정을 바꾸지 않고, 차단하지 않고, 자동 거부하지 않습니다.
+
 ### 승인 원장과 `unknown` 결과
 
 게이트가 물으면 Mary는 `~/.claude/mary/approvals.jsonl`에 `asked` 이벤트를 덧붙입니다. 기록에는:
@@ -182,7 +205,8 @@ matcher 밖의 도구와 구현된 패턴에 걸리지 않는 의미론적 위�
 - 사용자에게 보여준 정확한 설명
 - 도구 요청
 - 기계 대조용 정규화 요청 해시
-- 관측된 경우의 결과: `succeeded` / `failed` / `denied`
+- 관측된 경우의 결과: `succeeded` / `failed` / `denied` / `reconciled` — 마지막 것은 사람이
+  나중에 실제 부작용을 관측하고 `scripts/mary-reconcile.js`로 닫은 기록이며, 관측 증거가 첨부됩니다
 
 결과 기록 훅은 같은 해시의 열린 `asked`가 있을 때만 씁니다. 게이트를 거치지 않은 도구 호출은
 기록되지 않으므로, 원장은 모든 명령 출력이 쌓이는 평문 로그가 아니라 승인 기록으로 유지됩니다.
@@ -192,11 +216,49 @@ matcher 밖의 도구와 구현된 패턴에 걸리지 않는 의미론적 위�
 이미 성공했을 수 있는 작업의 재시도로 인한 중복 효과를 줄입니다. 사용자 거부는 호스트가
 `PermissionDenied` 이벤트를 낼 때만 `denied`로 닫히며, 내지 않으면 역시 `unknown`으로 남습니다.
 
+`unknown`은 저절로 해소되지 않습니다. 부작용을 실제로 관측했으면 항목을 닫습니다:
+
+```
+node scripts/mary-reconcile.js --list
+node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "<관측한 것>"
+```
+
+증거는 필수이고(관측 없는 종결은 원장이 막으려는 phantom-execution 그 자체입니다), 원장은
+덧붙이기 전용으로 유지되며, 호출 1회에 asked 1건만 닫히고, 물은 적 없는 해시는 닫을 수 없습니다.
+`reconciled`는 아무것도 허가하지 않습니다 — 해소된 unknown이 세션마다 다시 보고되는 것을 멈출 뿐입니다.
+
+Bash로 `mary-reconcile`을 호출하는 것 **자체가 게이트 대상**입니다: 종결이 기록되기 전에 승인
+대화상자가 해시·판정·증거를 사람에게 보여줍니다. CLI는 누가 쳤는지 알 수 없으므로 기록의
+`by` 필드는 `reconcile-cli`입니다 — 사람과의 결속은 자기 신고 라벨이 아니라 게이트입니다.
+결과 대조도 세션을 인식합니다: 한 세션에서 관측된 결과가 같은 명령에 대한 **다른 세션**의
+unknown 승인을 닫지 않고, 잉여 종결은 다음 asked를 선지불하지 않고 버려집니다.
+
+### 원격 알림 — 원격 승인이 아니라
+
+`mary-approval-notifier.js`(`Notification` 훅, `permission_prompt` matcher)는
+`~/.claude/mary/notify.json`에 설정한 웹훅으로 짧은 핑을 보낼 수 있습니다 — 예를 들어 휴대폰이
+구독하는 [ntfy.sh](https://ntfy.sh) 토픽. 승인 대기를 알아채기 위해 터미널 앞을 지킬 필요가
+없어집니다:
+
+```json
+{ "url": "https://ntfy.sh/your-private-topic", "headers": { "Title": "mary" } }
+```
+
+핑에는 의도적으로 **명령 내용·경로·프로젝트 식별자가 없습니다** — "승인 대기 중", 도구명,
+시각뿐입니다. 명령 문자열에는 비밀이, 폴더명에는 고객명이 들어갈 수 있고, 푸시 서비스는 외부
+당사자입니다. URL은 `https`여야 하며, 평문 `http`는 명시적 `"allowHttp": true`가 있어야만
+허용됩니다(예: 자기 LAN의 ntfy 인스턴스).
+
+**응답**은 여전히 터미널에서 합니다. 호스트의 권한 프롬프트에는 원격 응답 채널이 없고, 물리적으로
+그 자리에 있는 사람의 버튼을 원격 채널로 대체하는 것은 게이트의 최종 방어선을 그 채널의 인증
+강도와 맞바꾸는 결정입니다. 기기 종속 인증과 원장 결속을 갖춘 채널이 생기면 그때 이 판단을
+다시 검토합니다 — 편의의 부산물로가 아니라, 의도적으로.
+
 ## 집행 경계 — 게이트를 신뢰하기 전에 읽을 것
 
 일반 스킬 디렉터리 설치는 **신뢰 경계가 아닙니다.**
 
-에이전트가 `~/.claude/skills/mary-code/` 아래 파일을 고치거나, 사용자·프로젝트 설정을 바꾸거나,
+에이전트가 `~/.claude/skills/mary/` 아래 파일을 고치거나, 사용자·프로젝트 설정을 바꾸거나,
 훅을 끌 수 있을 수 있습니다. 자기 보호는 Mary의 집행 파일에 대한 명백한 수정을 눈에 보이게
 만들지만, 사용자 쓰기 가능 파일을 변조 불가능하게 만들 수는 없습니다. 기본 설치는 유용한 승인
 체크포인트이지, 관리자 수준 격리가 아닙니다.
@@ -212,14 +274,36 @@ matcher 밖의 도구와 구현된 패턴에 걸리지 않는 의미론적 위�
 ```json
 {
   "enabledPlugins": {
-    "mary-code@your-managed-marketplace": true
+    "mary@your-managed-marketplace": true
   },
   "allowManagedHooksOnly": true
 }
 ```
 
-`mary-code@skills-dir`를 대신 넣고 사용자 쓰기 가능 체크아웃이 강화됐다고 가정하지 **마세요.**
-이 저장소는 현재 원커맨드 관리형 배포를 제공하지 않습니다.
+`mary@skills-dir`를 대신 넣고 사용자 쓰기 가능 체크아웃이 강화됐다고 가정하지 **마세요.**
+
+원커맨드 관리형 배포가 저장소에 동봉됩니다:
+
+```
+# Windows — 관리자 권한 PowerShell
+powershell -ExecutionPolicy Bypass -File scripts\install-managed.ps1 [-AllowManagedHooksOnly]
+
+# macOS / Linux
+sudo sh scripts/install-managed.sh [--allow-managed-hooks-only]
+```
+
+둘 다 훅 스크립트를 관리자 소유 폴더에 복사**하고** `managed-settings.json`에 절대 경로로
+등록합니다 — 사용자 쓰기 가능한 스크립트를 가리키는 관리형 등록은 껍데기이기 때문입니다.
+기존 관리형 설정은 무엇이든 복사되기 **전에** 먼저 검증·백업되고, 기존 `hooks` 절은 명시적
+force 플래그 없이는 교체되지 않으며, 재실행은 배포된 스크립트 폴더를 중첩이 아니라 교체하고,
+쓰인 파일은 BOM 없이 기록 후 파스 검사됩니다(BOM은 엄격한 JSON 파서가 파일을 거부하게 만들어
+배포 전체를 조용한 no-op으로 만들 수 있습니다). 관리자 권한이 없는 환경에서는 이 배포가
+불가능하며, 그 경우 게이트는 "우회를 불가능하게"가 아니라 "우회를 눈에 보이게"가 정직한
+최대치입니다.
+
+`allowManagedHooksOnly` 없이 관리형 설치를 하면 Mary 플러그인 설치본이 같은 훅을 한 번 더
+등록합니다: 원장 이벤트가 두 배로 쌓이고 핑이 두 번 갑니다. 플래그를 켜거나, 사용자 공간
+플러그인의 훅을 끄세요.
 
 관리형 설정 위치:
 
@@ -248,6 +332,8 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 | `FAILLOG.md` | 관측된 실패, 기각된 반례, 카운터, task ID, 승격 상태. 하나 |
 | `_work-<슬러그>.md` | 작업 흐름당 하나의 진행 기록. 동시에 여러 개 가능. 완료된 것만 삭제 |
 | `approvals.jsonl` | 훅이 쓰는 덧붙이기 전용 승인·결과 원장 |
+| `notify.json` | 선택. "승인 대기" 핑을 보낼 웹훅 설정. 없으면 아무 트래픽도 없음 |
+| `_trifecta-<세션>.json` | 세션별 마커: 이 세션이 비신뢰 외부 콘텐츠를 읽었음. 센티널이 쓰고 게이트가 읽으며 7일 후 자동 제거. (세션 단위 상태가 옳은 유일한 자리 — 유입은 세션의 속성이고, 작업과 원장은 세션을 횡단합니다) |
 
 이 파일들은 사용자 컴퓨터에 남고 저장소에 올라가지 않습니다.
 
@@ -277,11 +363,15 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 | `skills/mary/LAYERS.md` | 정규 실패 키 |
 | `agents/mary-critic.md` | 4-2 단계가 쓰는 읽기 전용 반례 검토자 |
 | `scripts/mary-stats.js` | 카운터·승격 후보를 재계산하는 읽기 전용 검산기 |
-| `hooks/hooks.json` | `PreToolUse`·`PostToolUse`·`PostToolUseFailure`·`PermissionDenied`·`SessionStart` 등록 |
-| `scripts/hooks/mary-irreversible-gate.js` | 게이트 대상 인식, `ask`/`defer` 반환 |
+| `hooks/hooks.json` | `PreToolUse`·`PostToolUse`·`PostToolUseFailure`·`PermissionDenied`·`Notification`·`SessionStart` 등록 |
+| `scripts/hooks/mary-irreversible-gate.js` | 게이트 대상 인식, `ask`/`defer` 반환. 교차세션·trifecta 맥락 경고 추가 |
 | `scripts/hooks/mary-outcome-recorder.js` | 대응하는 승인의 관측 결과 기록 |
 | `scripts/hooks/mary-session-report.js` | 세션 시작 시 미결 승인을 `unknown`으로 보고 |
+| `scripts/hooks/mary-trifecta-sentinel.js` | 세션별 비신뢰 외부 콘텐츠 유입 기록 (차단·판정 없음) |
+| `scripts/hooks/mary-approval-notifier.js` | 권한 프롬프트 시 선택적 웹훅 핑 (명령 내용 미포함) |
 | `scripts/hooks/lib/ledger.js` | 요청 정규화와 덧붙이기 전용 원장 |
+| `scripts/mary-reconcile.js` | 부작용을 사람이 관측한 뒤 미결 승인을 닫는 CLI |
+| `scripts/install-managed.ps1` / `install-managed.sh` | 원커맨드 관리자(관리형 설정) 배포 |
 | `tests/gate.test.js` | 게이트·원장·결과 결속·세션 보고 회귀 테스트 |
 | `tests/stats.test.js` | 검산기·승격 판정 회귀 테스트 |
 
@@ -305,17 +395,23 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 - Bash 자기 보호는 보호 경로 언급과 쓰기 흔적의 결합 휴리스틱입니다. 파서가 아니므로 충분히
   우회적인 셸 명령은 피해 갈 수 있습니다.
 - 수동 거부 시 호스트가 `PermissionDenied`를 내는지는 완전히 문서화돼 있지 않습니다. 관측되지
-  않은 거부는 열린 채 남아 다음 세션 시작 때 `unknown`으로 보고됩니다.
+  않은 거부는 열린 채 남아 다음 세션 시작 때 `unknown`으로 보고됩니다 — 사람이 실제 결과를
+  관측한 뒤에는 `mary-reconcile.js`로 닫습니다.
+- 교차 세션 경고는 작업 디렉터리 문자열로 대조합니다. 같은 원격의 서로 다른 클론 두 개는
+  게이트가 볼 수 없는 공유 외부 상태입니다.
+- trifecta 센티널은 세 다리 중 둘(비신뢰 입력, 외부 전송)만 관측합니다. 민감정보 접근은 도구
+  호출에서 신뢰성 있게 감지할 수 없고, 감지한다고 주장하지 않습니다.
 - 별도 LLM 검토자는 생성자와 편향을 공유할 수 있습니다. 관측 가능한 증거의 대체물이 아닙니다.
 
 ## 개발 상태
 
-**현재 버전: Rv.0 / plugin 0.2.0 · Experimental**
+**현재 버전: Rv.0 / plugin 0.3.0 · Experimental**
 
 동작 중: 6단계 절차, Standard/Guarded 등급, 검증→반례→수정→재검증, 사용자 언어 자동 일치,
 다중 `_work` 기록, 실패 적립과 사용자 승인 승격, 비가역 게이트(래퍼 세탁 패턴 포함),
-승인-결과-거부 결속, 게이트 통과 호출 전용 원장, 미결 승인 보고, 동봉 비평 에이전트와 검산기,
-회귀 검사 68건.
+승인-결과-거부 결속, 게이트 통과 호출 전용 원장, 미결 승인 보고와 `reconciled` 종결,
+교차세션·trifecta 맥락 경고, 검증 영수증 검산, 승인 대기 웹훅 알림, 관리형 배포 스크립트,
+동봉 비평 에이전트와 검산기, 회귀 검사 109건.
 
 개발 중: **결정 재추적 엔진** — 명세 완료, 구현 진행 중.
 
@@ -334,4 +430,4 @@ Star는 선택이며 설치·기능·지원에 영향을 주지 않습니다.
 
 ## 라이선스
 
-Mary Code는 [MIT License](./LICENSE)로 배포됩니다.
+Mary는 [MIT License](./LICENSE)로 배포됩니다.

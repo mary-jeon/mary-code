@@ -1,6 +1,6 @@
-# Mary Code
+# Mary
 
-> **Rv.0 / plugin 0.2.0 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.3.0 · Experimental · Claude Code**
 >
 > **English** (canonical) · [한국어](./README.ko.md)
 
@@ -53,7 +53,7 @@ The canonical failure keys and stage mappings are documented in [`skills/mary/LA
 After installation, invoke the plugin skill directly in Claude Code:
 
 ```text
-/mary-code:mary
+/mary
 ```
 
 A direct invocation runs the full procedure regardless of task size.
@@ -64,7 +64,7 @@ Mary can also activate automatically when the request is:
 - multi-step, where an early judgment affects later results; or
 - fact-dependent, where statutes, figures, specifications, or other factual claims determine the outcome.
 
-Automatic activation depends on model judgment and can be missed. Use `/mary-code:mary` when you need the workflow with certainty.
+Automatic activation depends on model judgment and can be missed. Use `/mary` when you need the workflow with certainty.
 
 Mary is not intended for simple one-shot questions, explanations, translations, or lookups. Applying a heavy procedure to every request would make the harness easier to bypass and harder to use.
 
@@ -87,23 +87,23 @@ Mary requires:
 ### macOS / Linux
 
 ```bash
-git clone https://github.com/a01078794-arch/mary-code.git ~/.claude/skills/mary-code
-claude plugin validate --strict ~/.claude/skills/mary-code
+git clone https://github.com/mary-jeon/mary-code.git ~/.claude/skills/mary
+claude plugin validate --strict ~/.claude/skills/mary
 ```
 
 ### Windows PowerShell
 
 ```powershell
-git clone https://github.com/a01078794-arch/mary-code.git "$HOME\.claude\skills\mary-code"
-claude plugin validate --strict "$HOME\.claude\skills\mary-code"
+git clone https://github.com/mary-jeon/mary-code.git "$HOME\.claude\skills\mary"
+claude plugin validate --strict "$HOME\.claude\skills\mary"
 ```
 
-A folder under `~/.claude/skills/` that contains `.claude-plugin/plugin.json` loads on the next session as a skills-directory plugin. Mary appears as `mary-code@skills-dir` and its skill is namespaced as `/mary-code:mary`.
+A folder under `~/.claude/skills/` that contains `.claude-plugin/plugin.json` loads on the next session as a skills-directory plugin. Mary appears as `mary@skills-dir` and its skill is namespaced as `/mary:mary` (invokable as `/mary` when unambiguous).
 
-If you use **Code → Download ZIP** instead of Git, extract the complete repository and rename the extracted folder to `mary-code` so that this file exists:
+If you use **Code → Download ZIP** instead of Git, extract the complete repository and rename the extracted folder to `mary` so that this file exists:
 
 ```text
-~/.claude/skills/mary-code/.claude-plugin/plugin.json
+~/.claude/skills/mary/.claude-plugin/plugin.json
 ```
 
 Restart Claude Code after the first installation. After an update, restart or run `/reload-plugins` so changes to hooks and other plugin components are loaded.
@@ -113,13 +113,13 @@ Restart Claude Code after the first installation. After an update, restart or ru
 macOS / Linux:
 
 ```bash
-git -C ~/.claude/skills/mary-code pull --ff-only
+git -C ~/.claude/skills/mary pull --ff-only
 ```
 
 Windows PowerShell:
 
 ```powershell
-git -C "$HOME\.claude\skills\mary-code" pull --ff-only
+git -C "$HOME\.claude\skills\mary" pull --ff-only
 ```
 
 Then restart Claude Code or run `/reload-plugins`.
@@ -133,17 +133,19 @@ Mary has two protection layers, and they are not the same thing:
 | **Workflow rule** | The skill instructs Claude to hold every irreversible action until the target, scope, rollback path, and user approval are clear. |
 | **Hook gate** | The `PreToolUse` hook independently asks before the specific actions it can recognize in registered tool calls. |
 
+The gate's job is **routing to a human, not classification.** No pattern set reads full shell semantics, so the goal is not "recognize every dangerous command" — it is impossible. The goal is: route recognized risk, and everything the gate cannot judge, to the person; and never let a pattern produce an automatic allow. The actual defense line is the human approval button, which no encoding trick can pattern-match its way past — the patterns only decide when a human has to look.
+
 The Rv.0 hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
 
-- file deletion, including non-recursive forms (`rm`, `del`, `Remove-Item`, `find -delete`, `shred`);
+- file deletion, including non-recursive forms (`rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`);
 - `git push`, destructive Git reset/clean operations, forced branch deletion, or `--no-verify` bypasses;
-- GitHub repository or release deletion through `gh`;
+- GitHub repository, release, or gist deletion through `gh`, and `gh api` calls with the DELETE method;
 - destructive SQL patterns;
 - disk overwrite and truncation commands;
 - HTTP commands that send data;
 - package publication and selected deployment commands;
 - shell-wrapper and encoding invocations that would launder a command past pattern inspection (`bash -c`, `powershell -EncodedCommand`, piping a download into a shell, `eval`) — the wrapped content cannot be judged, so the wrapping itself is treated as "cannot judge → ask"; or
-- edits to Mary's own settings, manifest, hook registration, or hook scripts — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, or a PowerShell write cmdlet.
+- edits to Mary's own settings, manifest, hook registration, hook scripts, or the approval ledger (`approvals.jsonl`) — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, or a PowerShell write cmdlet. A ledger that can be edited quietly stops being evidence.
 
 The Bash self-protection check is a heuristic. No string-level inspection reads full shell semantics; it exists to make an obvious bypass visible, not to make one impossible.
 
@@ -153,6 +155,13 @@ For unrecognized commands and ordinary file writes, the hook returns `defer`, wh
 
 The gate is fail-closed for malformed hook input: empty input, invalid JSON, a missing tool name, or an unreadable Bash command produces `ask` rather than approval. This is not a universal deny-by-default policy. Tools outside the registered matcher and semantic risks that do not match the implemented patterns remain outside the hook's enforcement coverage.
 
+When the gate asks, it may append two best-effort context warnings to the text the user approves:
+
+- **Cross-session visibility.** Unresolved approvals from *other sessions* that target the same working directory are surfaced, because their unknown outcomes mean the state the user just reviewed may have changed. This is exactly why the ledger is shared rather than split per session — isolation would hide the collision; sharing makes it visible. (Matching is by cwd string; two clones of the same remote in different folders are not detected.)
+- **Lethal-trifecta signal.** `mary-trifecta-sentinel.js` (a `PostToolUse` observer on `WebFetch`, `WebSearch`, and fetch-shaped Bash commands — PostToolUse so a *denied* fetch, which ingested nothing, never poisons the signal) records when a session ingests untrusted external content. If the same session later asks approval for an *external send* — or for a wrapped/encoded command the gate cannot read, which may be one — the gate adds a trifecta warning. Two of the three legs are observable; private-data access, the third, is not reliably detectable from tool calls — claiming otherwise would be false confidence, so it is not claimed.
+
+Both warnings are visibility only: they never change the decision, never block, and never auto-deny.
+
 ### Approval ledger and `unknown` results
 
 When the gate asks, Mary appends an `asked` event to `~/.claude/mary/approvals.jsonl`. The record keeps:
@@ -160,17 +169,40 @@ When the gate asks, Mary appends an `asked` event to `~/.claude/mary/approvals.j
 - the exact explanation shown to the user;
 - the tool request;
 - a normalized request hash used for machine matching; and
-- the later result, when one is observed: `succeeded`, `failed`, or `denied`.
+- the later result, when one is observed: `succeeded`, `failed`, `denied`, or `reconciled` — the last written by `scripts/mary-reconcile.js` when a human observed the real side effects afterwards, with the observation attached as evidence.
 
 The result recorder only writes when a matching open `asked` entry exists. Tool calls that never passed the gate are not logged, so the ledger stays an approval record rather than a growing plaintext log of every command output.
 
 If no matching result arrives, the approval remains open. At the next session start Mary reports it as `unknown`—not failed—and instructs Claude to inspect the real side effect before considering any retry. This reduces duplicate effects from retrying an operation that may already have succeeded. A user denial is closed as `denied` only when the host emits the `PermissionDenied` event; if it does not, the denial also remains `unknown`.
 
+`unknown` never resolves by itself. Once the side effects have actually been observed, close the entry:
+
+```
+node scripts/mary-reconcile.js --list
+node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "<what was observed>"
+```
+
+Evidence is mandatory (a closure without observation is the phantom-execution failure the ledger exists to prevent), the ledger stays append-only, one asked instance closes per invocation, and a hash that was never asked cannot be closed. `reconciled` grants nothing — it only stops a resolved unknown from being re-reported every session.
+
+Invoking `mary-reconcile` through Bash is **itself a gated action**: the approval dialog shows the hash, outcome, and evidence to a person before the closure is written. The CLI cannot know who typed it, so the record's `by` field says `reconcile-cli` — the human binding is the gate, not a self-reported label. Outcome matching is also session-aware: a result observed in one session never closes another session's still-unknown approval for the same command, and a stray surplus closure is dropped rather than banked against the next time that command is asked.
+
+### Remote notification, not remote approval
+
+`mary-approval-notifier.js` (a `Notification` hook on the `permission_prompt` matcher) can POST a short ping to a webhook configured in `~/.claude/mary/notify.json` — for example an [ntfy.sh](https://ntfy.sh) topic your phone subscribes to — so a waiting approval no longer requires sitting at the terminal to notice it:
+
+```json
+{ "url": "https://ntfy.sh/your-private-topic", "headers": { "Title": "mary" } }
+```
+
+The ping deliberately contains **no command text, no paths, and no project identifiers** — only "approval waiting", the tool name, and a timestamp. Command text can contain secrets, folder names can identify clients, and a push service is an external party. The URL must be `https`; plaintext `http` needs an explicit `"allowHttp": true` (e.g. an ntfy instance on your own LAN).
+
+The *answer* still happens at the terminal. The host's permission prompt has no remote answer channel, and replacing the physically present human's button with a remote channel would swap the gate's final defense line for that channel's authentication strength. If a channel with device-bound authentication and ledger binding exists someday, revisit this deliberately — not as a side effect of wanting convenience.
+
 ## Enforcement boundary — read this before trusting the gate
 
 A normal skills-directory installation is **not a trust boundary**.
 
-The agent may be able to edit files under `~/.claude/skills/mary-code/`, change user or project settings, or disable hooks. Self-protection makes an obvious edit to Mary's enforcement files visible, but it cannot make user-writable files tamper-proof. Treat the default installation as a useful approval checkpoint, not as administrator-enforced isolation.
+The agent may be able to edit files under `~/.claude/skills/mary/`, change user or project settings, or disable hooks. Self-protection makes an obvious edit to Mary's enforcement files visible, but it cannot make user-writable files tamper-proof. Treat the default installation as a useful approval checkpoint, not as administrator-enforced isolation.
 
 A hardened deployment requires both:
 
@@ -182,13 +214,27 @@ Example shape for an administrator-managed marketplace deployment:
 ```json
 {
   "enabledPlugins": {
-    "mary-code@your-managed-marketplace": true
+    "mary@your-managed-marketplace": true
   },
   "allowManagedHooksOnly": true
 }
 ```
 
-Do **not** substitute `mary-code@skills-dir` and assume that the user-writable checkout has become hardened. This repository does not currently provide a one-command managed deployment.
+Do **not** substitute `mary@skills-dir` and assume that the user-writable checkout has become hardened.
+
+A one-command managed deployment ships with the repo:
+
+```
+# Windows — elevated PowerShell
+powershell -ExecutionPolicy Bypass -File scripts\install-managed.ps1 [-AllowManagedHooksOnly]
+
+# macOS / Linux
+sudo sh scripts/install-managed.sh [--allow-managed-hooks-only]
+```
+
+Both copy the hook scripts to an administrator-owned folder **and** register them with absolute paths in `managed-settings.json` — a managed registration pointing at user-writable scripts would be hollow. Existing managed settings are validated **before** anything is copied and backed up before being touched; an existing `hooks` section is never replaced without an explicit force flag; re-runs replace the deployed scripts folder instead of nesting into it; and the written file is parse-checked (written without a BOM — a BOM can make a strict JSON parser reject the file and silently turn the deployment into a no-op).
+
+Without `allowManagedHooksOnly`, a plugin install of Mary registers the same hooks a second time: ledger events double up and pings send twice. Either pass the flag or disable the user-space plugin's hooks.
 
 Managed settings locations are:
 
@@ -212,6 +258,8 @@ Mary keeps runtime state outside the repository in `~/.claude/mary/`. Files are 
 | `FAILLOG.md` | Observed failures, rejected counterexamples, counters, task IDs, and rule-promotion status. There is one shared file. |
 | `_work-<slug>.md` | One active task record per workstream. Multiple files may exist at the same time. Completed task files are removed; paused, blocked, failed, or abandoned records remain. |
 | `approvals.jsonl` | Append-only approval and execution-result ledger written by the hooks. |
+| `notify.json` | Optional. Webhook for the "approval waiting" ping (`mary-approval-notifier.js`). Absent → no traffic. |
+| `_trifecta-<session>.json` | Per-session marker: this session ingested untrusted external content. Written by the sentinel, read by the gate, auto-removed after 7 days. (The one place session-scoped state is the right shape — ingestion is a session property; tasks and the ledger span sessions.) |
 
 These files stay on the user's computer and are not pushed to this repository.
 
@@ -241,11 +289,15 @@ The plugin components must stay together.
 | `skills/mary/LAYERS.md` | Canonical failure keys and aliases |
 | `agents/mary-critic.md` | Read-only adversarial reviewer used by stage 4-2 |
 | `scripts/mary-stats.js` | Read-only auditor that recomputes counters and promotion candidates |
-| `hooks/hooks.json` | Registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, and `SessionStart` |
-| `scripts/hooks/mary-irreversible-gate.js` | Recognizes gated actions and returns `ask` or `defer` |
+| `hooks/hooks.json` | Registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `Notification`, and `SessionStart` |
+| `scripts/hooks/mary-irreversible-gate.js` | Recognizes gated actions and returns `ask` or `defer`; adds cross-session and trifecta context warnings |
 | `scripts/hooks/mary-outcome-recorder.js` | Records the observed result for a matching approval |
 | `scripts/hooks/mary-session-report.js` | Reports unresolved approvals as `unknown` at session start |
+| `scripts/hooks/mary-trifecta-sentinel.js` | Records per-session ingestion of untrusted external content (never blocks, never decides) |
+| `scripts/hooks/mary-approval-notifier.js` | Optional webhook ping when a permission prompt appears (no command content) |
 | `scripts/hooks/lib/ledger.js` | Normalizes requests and maintains the append-only ledger |
+| `scripts/mary-reconcile.js` | Closes an open approval after human observation of the real side effects |
+| `scripts/install-managed.ps1` / `install-managed.sh` | One-command administrator (managed-settings) deployment |
 | `tests/gate.test.js` | Regression tests for the gate, ledger, result binding, and session report |
 | `tests/stats.test.js` | Regression tests for the counter auditor and promotion-candidate logic |
 
@@ -267,12 +319,14 @@ The plugin components must stay together.
 - The decision-retrace engine is specified but not implemented.
 - The hook recognizes a defined set of tools and patterns; it does not mediate every possible tool, command, external send, or business-system write.
 - The Bash self-protection check pairs a protected-path mention with a write indicator. It is a visibility heuristic, not a parser; a sufficiently indirect shell command can still avoid it.
-- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented. A denial that is never observed stays open and is reported as `unknown` at the next session start.
+- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented. A denial that is never observed stays open and is reported as `unknown` at the next session start — `mary-reconcile.js` closes it once a human has observed what actually happened.
+- Cross-session warnings match by working-directory string. Two clones of the same remote in different folders are shared external state the gate cannot see.
+- The trifecta sentinel observes two legs (untrusted input, external send). Private-data access, the third, is not reliably detectable from tool calls and is deliberately not claimed.
 - A separate LLM reviewer may share the generator's biases. It is not a substitute for observable evidence.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.2.0 · Experimental**
+**Current version: Rv.0 / plugin 0.3.0 · Experimental**
 
 Working now:
 
@@ -285,9 +339,13 @@ Working now:
 - recognized irreversible-action gating through `PreToolUse`, including shell-wrapper and encoding laundering patterns;
 - approval-to-result binding through `PostToolUse`, `PostToolUseFailure`, and `PermissionDenied`;
 - gated-calls-only ledger recording, with no tool response bodies stored;
-- unresolved approval reporting through `SessionStart`;
+- unresolved approval reporting through `SessionStart`, and `reconciled` closure after human observation;
+- cross-session and lethal-trifecta context warnings in the approval text;
+- verification-receipt auditing in `mary-stats.js`;
+- an optional "approval waiting" webhook ping (`Notification` hook, no command content);
+- one-command managed (administrator) deployment scripts;
 - a bundled read-only critic agent and a deterministic counter auditor; and
-- 65 regression checks across the gate, ledger, auditor, and session reporting.
+- 109 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting.
 
 In development:
 
@@ -319,4 +377,4 @@ Stars are optional and do not affect installation, features, or support.
 
 ## License
 
-Mary Code is released under the [MIT License](./LICENSE).
+Mary is released under the [MIT License](./LICENSE).

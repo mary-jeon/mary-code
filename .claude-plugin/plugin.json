@@ -1,13 +1,13 @@
 {
-  "name": "mary-code",
-  "displayName": "Mary Code",
-  "version": "0.2.0",
+  "name": "mary",
+  "displayName": "Mary",
+  "version": "0.3.0",
   "description": "Task harness for Claude Code. Proceeds autonomously on reversible work, verifies claims against observable evidence, and gates irreversible actions behind user approval.",
   "author": {
     "name": "mary jeon",
-    "url": "https://github.com/a01078794-arch"
+    "url": "https://github.com/mary-jeon"
   },
-  "repository": "https://github.com/a01078794-arch/mary-code",
+  "repository": "https://github.com/mary-jeon/mary-code",
   "license": "MIT",
   "keywords": ["harness", "verification", "approval-gate", "failure-taxonomy"],
   "skills": "./skills/",

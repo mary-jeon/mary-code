@@ -1,9 +1,9 @@
 ---
 name: mary
-description: Lightweight workflow harness for multi-step, high-impact, or evidence-sensitive tasks in Claude Code. Lets the agent proceed autonomously on reversible work, verifies factual claims against observable evidence, and requires user confirmation before irreversible actions or unresolved value decisions. Use when /mary-code:mary is invoked or when a task is multi-step, irreversible, or fact-dependent. Do not use for simple one-shot questions.
+description: Lightweight workflow harness for multi-step, high-impact, or evidence-sensitive tasks in Claude Code. Lets the agent proceed autonomously on reversible work, verifies factual claims against observable evidence, and requires user confirmation before irreversible actions or unresolved value decisions. Use when /mary is invoked or when a task is multi-step, irreversible, or fact-dependent. Do not use for simple one-shot questions.
 ---
 
-# mary-code · Rv.0
+# Mary · Rv.0
 
 **Prime rule: never make the user do the work.** Claude fills everything in first and asks only for confirmation.
 Questions are asked with the **AskUserQuestion tool**, as choices. Never demand free-form writing.
@@ -25,7 +25,7 @@ If it cannot be read, report that fact and write `L?/other` in the FAILLOG — *
 
 ## When to use
 
-Only on `/mary-code:mary` invocation, or when at least one of these holds:
+Only on `/mary` invocation, or when at least one of these holds:
 
 - the task includes an irreversible action (delete · overwrite · external send · deploy · business-system write)
 - the task spans multiple steps
@@ -49,7 +49,7 @@ trivial work, the user starts bypassing the harness, and a bypassed harness is n
 
 Invocation path and grade are **two different axes**. Do not memorize combinations — judge **in order**:
 
-1. **Was `/mary-code:mary` explicitly invoked?**
+1. **Was `/mary` explicitly invoked?**
    → **Run stages 0–5, all of them.** Stages are never skipped, but each may be **expressed briefly**
    in proportion to the task. The user turned the harness on deliberately, so nothing is reduced —
    **"is this self-evident?" is not even asked on this path.**
@@ -61,7 +61,7 @@ Invocation path and grade are **two different axes**. Do not memorize combinatio
 
 If something was compressed, **record that fact and the reason** in stage 5.
 
-> **Why explicit invocation is the heavier path**: typing `/mary-code:mary` is a signal meaning
+> **Why explicit invocation is the heavier path**: typing `/mary` is a signal meaning
 > "look harder." Granting reduction rights on that path would invert signal and response.
 > Auto-activation, by contrast, was never requested, so it may run lighter.
 > And the judge of "self-evident" is always the generator itself (↔L8) — removing that question
@@ -93,6 +93,15 @@ distribution only work if they accumulate in one place. Domain separation is alr
 
 > Wherever this document says `_work.md`, it means **"that task's `_work-<slug>.md` file"**.
 > The slug is the task-name part of `task_id` (e.g. `_work-p28-valvetrain-005.md`).
+
+> **Concurrent sessions.** `_work-*.md` files are plain files with no locking; two sessions
+> writing to the same file clobber each other silently. So: **if any time has passed since you
+> last read a `_work` file, re-read it immediately before writing** — the same re-check stage
+> 4-5 step 3 applies before irreversible execution. If it changed unexpectedly, another session
+> may own it: stop, tell the user, and append below the existing content rather than rewriting it.
+> RULES, FAILLOG, and the ledger stay **shared** on purpose — cross-session visibility (who else
+> has an open approval on this directory) is what prevents collisions on shared external state
+> like a git repository; per-session isolation would only hide them.
 
 ## On start (every time, no exceptions)
 
@@ -351,6 +360,23 @@ Report with evidence (output, diff, citations). **If it failed, write that it fa
 
 Write to `_work.md`: `- [4] verify <pass/fail> / counterexamples N (model: <…>) / fixes M / rejected K / re-verify <result>`.
 
+**Verification receipt.** For Guarded tasks — and any task where 4-1 actually ran — condense the
+evidence into a machine-readable block in `_work.md`, one item per verifiable claim:
+
+```json
+{ "receipt": "verification", "task_id": "<task_id>",
+  "items": [
+    { "check": "what was claimed", "cmd": "what was actually run",
+      "observed": "what it actually printed", "pass": true }
+  ] }
+```
+
+`mary-stats.js` audits this block: missing fields and `pass: false` items are reported, and a task
+is not closed as `completed` while the auditor reports problems with its receipt. Prose
+"I checked it" is exactly what L11 phantom-execution looks like from the outside; the receipt
+binds each claim to the command that ran and what it printed. A receipt nobody consumes is
+ritual — the auditor is the consumer that keeps it honest.
+
 ### 4-5. Approve → re-check → conditional execution → observe outcome  ↔L6 L8
 
 **The irreversible actions deferred in stage 3 execute here.** An irreversible action that did not
@@ -478,7 +504,8 @@ Counter arithmetic follows the `counted_status` table in step 3. No judgment out
 > as **judgment-only** (design choice, strategy, taste) has nothing to run in 4-1; demanding a pass
 > would leave such tasks **permanently unable to reach `completed`**, locking the slot. The precise
 > condition is one of:
-> ① if verifiable items **existed**, 4-1 (and 4-4 if there were fixes) actually ran and the results are recorded
+> ① if verifiable items **existed**, 4-1 (and 4-4 if there were fixes) actually ran, the results are
+>   recorded, and the verification receipt (4-4) passes the `mary-stats.js` audit
 > ② if verifiable items **did not exist**, stage 0 records "this task was judgment-only"
 > Either way, **verification is never faked.** A task closed under ② writes
 > `no verifiable items (judgment domain)` in the "what verified it" line of the 3-line report.

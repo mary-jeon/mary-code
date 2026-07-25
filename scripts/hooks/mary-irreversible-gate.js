@@ -38,7 +38,9 @@
 
 'use strict';
 
-const { requestHash, append } = require('./lib/ledger');
+const fs = require('fs');
+const path = require('path');
+const { requestHash, append, openApprovals, MARY_DIR } = require('./lib/ledger');
 
 const HOOK_ID = 'mary:pre:irreversible-gate';
 
@@ -50,7 +52,7 @@ const BASH_PATTERNS = [
   // rm is deletion regardless of flags. Matching only -r/-f would let
   // "rm single-file" slip past the gate.
   { re: /(^|[\s;&|])rm\s/i,                              category: 'deletion' },
-  { re: /(^|[\s;&|])(rmdir|del|Remove-Item)\b/i,         category: 'deletion' },
+  { re: /(^|[\s;&|])(rmdir|del|Remove-Item|Clear-Content)\b/i, category: 'deletion' },
   { re: /(^|[\s;&|])find\b[^\n]*\s-delete\b/i,           category: 'deletion' },
   { re: /(^|[\s;&|])shred\b/i,                           category: 'deletion' },
   { re: /(^|[\s;&|])truncate\b/i,                        category: 'overwrite' },
@@ -61,7 +63,8 @@ const BASH_PATTERNS = [
   // reversible. Case matters here — no /i flag.
   { re: /\bgit\s+branch\s+(\S+\s+)*-\w*D/,               category: 'deletion' },
   { re: /\bgit\s+branch\b[^\n]*(--delete\s+--force|--force\s+--delete)/i, category: 'deletion' },
-  { re: /\bgh\s+(repo|release)\s+delete\b/i,             category: 'deletion' },
+  { re: /\bgh\s+(repo|release|gist)\s+delete\b/i,        category: 'deletion' },
+  { re: /\bgh\s+api\b[^\n]*(-X|--method)[\s=]+DELETE\b/i, category: 'external send' },
   { re: /\b(drop\s+table|delete\s+from|truncate\s+table)\b/i, category: 'business-system write' },
   { re: /\bdd\s+if=/i,                                   category: 'overwrite' },
   { re: /(^|[\s;&|])(curl|wget|Invoke-WebRequest)\b[^\n]*(-X\s*(POST|PUT|DELETE|PATCH)|--data|-d\s)/i,
@@ -76,15 +79,24 @@ const BASH_PATTERNS = [
   { re: /(^|[\s;&|])(iex|invoke-expression)\b/i,         category: 'gate bypass' },
   { re: /(^|[\s;&|])eval\s/i,                            category: 'gate bypass' },
   { re: /\|\s*(bash|sh|zsh|pwsh|powershell)(\.exe)?\s*($|[\s;&|])/i, category: 'gate bypass' },
+  // Closing a ledger entry is itself consequential: the approval dialog is where
+  // a human sees the hash, outcome, and evidence before the closure is written.
+  { re: /\bmary-reconcile(\.js)?\b/i,                    category: 'ledger closure' },
 ];
 
-/* This hook's own enforcement configuration. Changing it must go through the user. */
+/* This hook's own enforcement configuration. Changing it must go through the user.
+ * The approval ledger belongs here too — if the ledger can be edited quietly,
+ * approval history stops being evidence. */
 const SELF_PROTECTED = [
   /[\\/]\.claude[\\/]settings(\.local)?\.json$/i,
   /[\\/]managed-settings\.json$/i,
   /[\\/]hooks[\\/]hooks\.json$/i,
   /[\\/]\.claude-plugin[\\/]plugin\.json$/i,
   /[\\/]scripts[\\/]hooks[\\/]/i,
+  /[\\/]mary[\\/]approvals\.jsonl$/i,
+  // Part of the ledger-integrity chain since 0.3.0: the reconcile CLI (its
+  // evidence requirement), the receipt auditor, and the managed installers.
+  /[\\/]scripts[\\/](mary-reconcile\.js|mary-stats\.js|install-managed\.(ps1|sh))$/i,
 ];
 
 /* Protected-path patterns for Bash command strings. SELF_PROTECTED anchors on the
@@ -96,6 +108,8 @@ const BASH_SELF_PROTECTED = [
   /hooks[\\/]hooks\.json/i,
   /\.claude-plugin[\\/]plugin\.json/i,
   /scripts[\\/]hooks[\\/]/i,
+  /mary[\\/]approvals\.jsonl/i,
+  /scripts[\\/](mary-reconcile\.js|mary-stats\.js|install-managed\.(ps1|sh))/i,
 ];
 
 /* Signals that a command can modify files. Only used in combination with a
@@ -163,6 +177,67 @@ function decide(payload) {
   return { decision: 'defer', reason: 'No registered irreversible action recognized' };
 }
 
+/* ── Context warnings (best-effort; never change the decision) ────── */
+
+function sessionMarkerPath(sessionId) {
+  return path.join(MARY_DIR, `_trifecta-${String(sessionId).replace(/[^A-Za-z0-9-]/g, '')}.json`);
+}
+
+/**
+ * Append two observations to the text the human is about to approve.
+ * Both are visibility, not judgment — failing to compute them never changes
+ * the decision, and neither ever produces an automatic allow or deny.
+ *
+ * 1. Cross-session: another session's still-open approval targeting the same
+ *    working directory means the state the user just reviewed may have changed.
+ *    Splitting the ledger per session would HIDE this — sharing one ledger is
+ *    what makes it visible. (Limitation: matching is by cwd string; two clones
+ *    of the same remote in different folders are not detected.)
+ *
+ * 2. Lethal trifecta (L12): this session has already ingested untrusted external
+ *    content (recorded by mary-trifecta-sentinel.js) and the call being approved
+ *    is an external send. Two of the three legs are observable; private-data
+ *    access, the third, is not reliably detectable — so this is a warning shown
+ *    to the human, never a block.
+ */
+function withContextWarnings(v, payload) {
+  let reason = v.reason;
+  try {
+    const sid = payload.session_id || null;
+    const cwd = payload.cwd ? String(payload.cwd).toLowerCase() : null;
+    if (cwd) {
+      const others = openApprovals().filter(a =>
+        a.session && a.session !== sid && a.cwd && String(a.cwd).toLowerCase() === cwd);
+      if (others.length) {
+        reason += `\n\n⚠ ${others.length} unresolved approval(s) from other session(s) target this working directory. ` +
+          `Their outcomes are unknown — the state you just reviewed may have changed. ` +
+          `(Close them after observing side effects: node scripts/mary-reconcile.js)`;
+      }
+    }
+  } catch { /* visibility is best-effort */ }
+  try {
+    // 'gate bypass' is included deliberately: a wrapped or encoded command cannot
+    // be read, so it MAY be a send — excluding it would exempt exactly the
+    // commands built to evade reading.
+    if (/external send|gate bypass/.test(v.category || '') && payload.session_id) {
+      const marker = sessionMarkerPath(payload.session_id);
+      if (fs.existsSync(marker)) {
+        let seen = '';
+        try {
+          const m = JSON.parse(fs.readFileSync(marker, 'utf8'));
+          seen = Object.entries(m.sources || {}).map(([k, n]) => `${k}×${n}`).join(', ');
+        } catch { seen = 'marker unreadable'; }
+        reason += `\n\n⚠ lethal-trifecta signal (L12): this session has ingested untrusted external content` +
+          (seen ? ` (${seen})` : '') +
+          ` and this call is an external send — or a wrapper the gate cannot read, which may be one. ` +
+          `If the session also touched private data, all three legs are present. ` +
+          `Check exactly what is being sent before approving.`;
+      }
+    }
+  } catch { /* visibility is best-effort */ }
+  return reason;
+}
+
 /* ── Output ─────────────────────────────────────────────────────── */
 
 function emit(decision, reason) {
@@ -199,6 +274,7 @@ function main() {
     }
 
     const v = decide(payload);
+    if (v.decision === 'ask') v.reason = withContextWarnings(v, payload);
 
     if (v.decision === 'ask') {
       // Record the approval request in the ledger. The sentence a human saw
