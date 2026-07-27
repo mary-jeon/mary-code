@@ -92,7 +92,7 @@ function parseWork(text, file) {
     return m ? m[1].trim() : null;
   };
   return { file, status: grab('status'), counted: grab('counted_status'), task: grab('task_id'),
-           grade: grab('grade'), receipts: parseReceipts(text) };
+           grade: grab('grade'), verification: grab('verification'), receipts: parseReceipts(text) };
 }
 
 /* ── Verification receipts (SKILL stage 4-4) ─────────────────────── */
@@ -142,12 +142,19 @@ function parseReceipts(text) {
 
 /* ── Analysis ────────────────────────────────────────────────────── */
 
+/* Canonical counted_status literals — these are the exact strings SKILL.md
+ * stage 5.3 names for its three buckets: `completed` / `blocked-failed` /
+ * `user-stopped` (plus `none` before first counting). The auditor matches
+ * these strings verbatim; `stopped` is accepted as a legacy alias from
+ * ledgers written before the literals were pinned down. */
 const BUCKET = {
   completed: 'completed',
   blocked: 'blocked-failed', failed: 'blocked-failed',
-  paused: 'stopped', abandoned: 'stopped',
+  paused: 'user-stopped', abandoned: 'user-stopped',
   draft: 'none', active: 'none',
 };
+const COUNTED_ALIAS = { stopped: 'user-stopped' };
+const normCounted = c => COUNTED_ALIAS[c] || c;
 
 function analyze({ faillog, works }) {
   const report = { candidates: [], warnings: [], recount: {}, counters: faillog.counters, works };
@@ -190,17 +197,28 @@ function analyze({ faillog, works }) {
     if (seen.has(w.task)) report.warnings.push(`duplicate task_id: ${w.task} (${seen.get(w.task)}, ${w.file})`);
     seen.set(w.task, w.file);
     const expect = BUCKET[w.status];
-    if (expect && w.counted && w.counted !== expect && w.counted !== 'none') {
+    if (expect && w.counted && normCounted(w.counted) !== expect && w.counted !== 'none') {
       report.warnings.push(`${w.file}: status=${w.status} but counted_status=${w.counted} (expected: ${expect} or none)`);
     }
     for (const rc of (w.receipts || [])) {
       for (const e of rc.errors) report.warnings.push(`${w.file}: verification receipt invalid — ${e}`);
       if (rc.failing) report.warnings.push(`${w.file}: verification receipt has ${rc.failing} failing item(s) — not closable as completed`);
+      // A receipt pasted in from a different task passes every field check —
+      // binding it to THIS task's id is what makes it this task's evidence.
+      if (rc.task && w.task && rc.task !== w.task) {
+        report.warnings.push(`${w.file}: receipt task_id (${rc.task}) does not match _work task_id (${w.task})`);
+      }
     }
     // The most likely receipt failure is not writing one at all (SKILL 4-4
     // requires it for Guarded work and whenever 4-1 ran). Detectable only at
     // the completed boundary — an active task legitimately has none yet.
-    if (w.status === 'completed' && !(w.receipts || []).length) {
+    // A task stage 0 classified as judgment-only (frontmatter
+    // `verification: judgment-only`) has nothing 4-1 could have run, so
+    // demanding a receipt would make `completed` unreachable for it (SKILL
+    // stage 5, terminal-state note ②). The flag exempts it — visibly, here,
+    // not by silently skipping the check.
+    if (w.status === 'completed' && !(w.receipts || []).length &&
+        !/judgment-only/i.test(w.verification || '')) {
       report.warnings.push(`${w.file}: status=completed but no verification receipt found (SKILL 4-4)`);
     }
   }

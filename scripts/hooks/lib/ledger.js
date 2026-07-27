@@ -52,6 +52,49 @@ function requestHash(toolName, toolInput) {
     .digest('hex').slice(0, 32);
 }
 
+/* ── Secret masking ─────────────────────────────────────────────────
+ * The ledger stores request text in plaintext forever. A gated command like
+ * `curl -H "Authorization: Bearer xxx"` would otherwise leave the token in the
+ * ledger long after the command ran (L17 prompt-log-retention-leak) — the same
+ * reason the outcome recorder never stores response bodies. Masking applies
+ * only to the STORED copy (presented_text / request); the hash is computed over
+ * the raw input, so approval→outcome matching is unaffected, and the dialog the
+ * human sees is the unmasked original.
+ *
+ * Pattern-based masking is best-effort, not a guarantee — an unrecognized
+ * secret format still lands in plaintext. That limitation is documented in
+ * docs/threat-model.md rather than papered over.
+ */
+const SECRET_PATTERNS = [
+  // header/assignment forms: keep the key, mask the value
+  [/(authorization\s*[:=]\s*)(bearer\s+|basic\s+)?[^\s"'&;]+/gi, '$1$2«masked»'],
+  [/\b((?:api[_-]?key|apikey|token|secret|passwd|password|access[_-]?key|client[_-]?secret)\s*[=:]\s*)[^\s"'&;]+/gi, '$1«masked»'],
+  // well-known token shapes
+  [/\bAKIA[0-9A-Z]{16}\b/g, '«masked»'],                             // AWS access key id
+  [/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, '«masked»'],                   // GitHub tokens
+  [/\bsk-[A-Za-z0-9_-]{20,}\b/g, '«masked»'],                        // API secret keys (sk-…)
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '«masked»'],                 // Slack tokens
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+/g, '«masked»'], // JWT
+];
+
+function maskSecrets(s) {
+  let out = String(s);
+  for (const [re, rep] of SECRET_PATTERNS) out = out.replace(re, rep);
+  return out;
+}
+
+/** Mask every string value in an object tree (used on the stored request copy). */
+function maskDeep(v) {
+  if (typeof v === 'string') return maskSecrets(v);
+  if (Array.isArray(v)) return v.map(maskDeep);
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v)) o[k] = maskDeep(v[k]);
+    return o;
+  }
+  return v;
+}
+
 /** Never throws. A failed write must not change a gate decision. */
 function append(record) {
   try {
@@ -117,4 +160,5 @@ function openApprovals() {
   return entries.filter(e => !e.closed).map(e => e.rec);
 }
 
-module.exports = { canonicalize, requestHash, append, readAll, openApprovals, LEDGER, MARY_DIR };
+module.exports = { canonicalize, requestHash, append, readAll, openApprovals,
+  maskSecrets, maskDeep, LEDGER, MARY_DIR };

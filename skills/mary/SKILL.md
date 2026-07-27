@@ -173,6 +173,7 @@ task_id: YYYYMMDD-<task-slug>-NNN
 started: YYYY-MM-DD
 updated: YYYY-MM-DD
 grade: Standard | Guarded
+verification: verifiable | mixed | judgment-only
 scope: <kebab-case scope tag; prefer reusing one already in the FAILLOG totals table>
 ---
 # <task name>
@@ -205,6 +206,11 @@ If external documents (web, PDF, mail, issues) are inputs, say that here too.
 - **Verifiable** — parts checkable by execution, tests, original-source comparison, measurement,
   or direct inspection (statute text, figures, institution names, code behavior, file state)
   → stage 4 checks them **for real**
+**Record the result in the frontmatter `verification:` field** — `verifiable`, `mixed`, or
+`judgment-only`. `judgment-only` is what later lets a task with nothing to run in 4-1 close as
+`completed` without a verification receipt (stage 5, terminal-state note ②) — the auditor
+(`mary-stats.js`) reads this field, so an unrecorded classification cannot be honored.
+
 - **Judgment domain** — parts with no verification method in principle (choices, design, strategy, taste)
   → this is a `non-verifiable domain`, so **say so** and proceed.
   Neither assert the conclusion nor hedge vaguely. Instead state **the recommendation, its key
@@ -454,8 +460,11 @@ The only difference is whether **that task's `_work-*.md` file is deleted** (ter
    | has a value | belongs to the **same bucket** | **do nothing** (e.g. `blocked` → `failed`) |
    | has a value | a **different bucket** | old bucket **−1**, new bucket **+1**, update `counted_status`. `harness tasks run` **unchanged** |
 
-   There are three buckets — `completed` = verified complete / `blocked`·`failed` = blocked-failed /
-   `paused`·`abandoned` = user-stopped.
+   There are three buckets, and the **exact `counted_status` literals** are:
+   `none` · `completed` · `blocked-failed` · `user-stopped`.
+   (`completed` = verified complete / `blocked`·`failed` → `blocked-failed` /
+   `paused`·`abandoned` → `user-stopped`.) Write these strings verbatim — the auditor
+   (`mary-stats.js`) matches them literally, and an invented variant reads as a mismatch.
    **`harness tasks run` increments exactly once per `task_id`.** Otherwise the denominator inflates
    and every rate reads low.
 
@@ -506,7 +515,8 @@ Counter arithmetic follows the `counted_status` table in step 3. No judgment out
 > condition is one of:
 > ① if verifiable items **existed**, 4-1 (and 4-4 if there were fixes) actually ran, the results are
 >   recorded, and the verification receipt (4-4) passes the `mary-stats.js` audit
-> ② if verifiable items **did not exist**, stage 0 records "this task was judgment-only"
+> ② if verifiable items **did not exist**, stage 0 recorded `verification: judgment-only` in the
+>   frontmatter — the auditor exempts exactly that case from the receipt requirement
 > Either way, **verification is never faked.** A task closed under ② writes
 > `no verifiable items (judgment domain)` in the "what verified it" line of the 3-line report.
 

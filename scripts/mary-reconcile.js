@@ -55,8 +55,24 @@ function main() {
 
   if (args.list || args._.length === 0) {
     if (!open.length) { console.log('No open approvals. Nothing to reconcile.'); return; }
+    // Reading the ledger is itself recorded in the ledger: invoking this CLI is
+    // a gated action, so its own `asked` entry is appended BEFORE the command
+    // runs, and the outcome recorder closes it only after it exits. A fold
+    // computed here therefore sees this very call as one open approval. That is
+    // the append-only design working, not a leak — but unmarked it reads as
+    // "one more thing to close". Mark the newest matching entry.
+    const selfRe = /\bmary-reconcile(\.js)?\b/i;
+    let selfIdx = -1;
+    open.forEach((a, i) => {
+      const cmd = a.request && a.request.command;
+      if (cmd && selfRe.test(String(cmd))) selfIdx = i;
+    });
     console.log(`${open.length} open approval(s):\n`);
-    for (const a of open) console.log(fmt(a));
+    open.forEach((a, i) => {
+      console.log(fmt(a) + (i === selfIdx
+        ? '\n    ↑ likely this very call — its own gate entry; the outcome recorder closes it when this command exits'
+        : ''));
+    });
     console.log('\nClose one after observing its side effects:');
     console.log('  node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "..."');
     return;

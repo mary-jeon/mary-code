@@ -25,7 +25,10 @@ function buildContext() {
   }
   if (!open.length) return null;
 
-  const lines = open.slice(-MAX_SHOWN).map(a => {
+  // Oldest first. The oldest unknown is the riskiest — it has had the longest
+  // time for its unobserved side effects to matter. Truncating from the head
+  // would hide exactly those first.
+  const lines = open.slice(0, MAX_SHOWN).map(a => {
     const when = String(a.ts || '').replace('T', ' ').slice(0, 16);
     const what = a.request && a.request.command
       ? String(a.request.command).slice(0, 120)

@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.3.0 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.0 · Experimental · Claude Code**
 >
 > **English** (canonical) · [한국어](./README.ko.md)
 
@@ -137,23 +137,26 @@ The gate's job is **routing to a human, not classification.** No pattern set rea
 
 The Rv.0 hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
 
-- file deletion, including non-recursive forms (`rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`);
-- `git push`, destructive Git reset/clean operations, forced branch deletion, or `--no-verify` bypasses;
+- file deletion, including non-recursive and path-prefixed forms (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`);
+- `git push` (with global options such as `-C` tolerated; `--dry-run` exempts only the command segment it appears in), destructive Git reset/clean operations, forced branch deletion, or `--no-verify` bypasses;
 - GitHub repository, release, or gist deletion through `gh`, and `gh api` calls with the DELETE method;
 - destructive SQL patterns;
 - disk overwrite and truncation commands;
-- HTTP commands that send data;
+- HTTP commands that send data, including upload forms (`-F`/`--form`, `-T`/`--upload-file`, `--json`, `--data-*`);
+- remote sync and cloud deletion (`rsync --delete`, `scp`/`rsync` to `user@host:` targets, `aws s3 rm`/`rb`/`sync --delete`);
 - package publication and selected deployment commands;
-- shell-wrapper and encoding invocations that would launder a command past pattern inspection (`bash -c`, `powershell -EncodedCommand`, piping a download into a shell, `eval`) — the wrapped content cannot be judged, so the wrapping itself is treated as "cannot judge → ask"; or
-- edits to Mary's own settings, manifest, hook registration, hook scripts, or the approval ledger (`approvals.jsonl`) — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, or a PowerShell write cmdlet. A ledger that can be edited quietly stops being evidence.
+- shell-wrapper and encoding invocations that would launder a command past pattern inspection (`bash -c`, interpreter one-liners such as `python -c` / `node -e`, `powershell -EncodedCommand`, `ssh host <command>`, piping a download into a shell, `eval`) — the wrapped content cannot be judged, so the wrapping itself is treated as "cannot judge → ask"; or
+- edits to Mary's own settings, manifest, hook registration, hook scripts, or the approval ledger (`approvals.jsonl`) — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, `ln`, or a PowerShell write cmdlet. A ledger that can be edited quietly stops being evidence.
 
-The Bash self-protection check is a heuristic. No string-level inspection reads full shell semantics; it exists to make an obvious bypass visible, not to make one impossible.
+Self-protection is **anchored**: plugin-relative paths (`scripts/`, `hooks/hooks.json`, `.claude-plugin/plugin.json`) are protected only under the plugin's actual install root — the same names in unrelated repositories do not trigger the gate. Host-level enforcement files (`.claude/settings*.json`, `managed-settings.json`) and the ledger are protected at any path. A gate that cries wolf trains the user to approve without reading, which defeats the gate.
+
+The Bash self-protection check is a heuristic. No string-level inspection reads full shell semantics; it exists to make an obvious bypass visible, not to make one impossible. The known bypass surfaces — the ones demonstrated and since closed, and the ones open by construction — are published in [`docs/threat-model.md`](docs/threat-model.md).
 
 For recognized actions, the hook returns Claude Code's native `ask` decision. It does not silently approve the action and does not reuse a previous approval.
 
 For unrecognized commands and ordinary file writes, the hook returns `defer`, which hands the decision back to Claude Code's normal permission system. `defer` does **not** mean the hook verified the action as safe.
 
-The gate is fail-closed for malformed hook input: empty input, invalid JSON, a missing tool name, or an unreadable Bash command produces `ask` rather than approval. This is not a universal deny-by-default policy. Tools outside the registered matcher and semantic risks that do not match the implemented patterns remain outside the hook's enforcement coverage.
+The gate is fail-closed for malformed hook input: empty input, invalid JSON, a missing tool name, or an unreadable Bash command produces `ask` rather than approval. This is not a universal deny-by-default policy. **The one surface the gate never sees**: tools outside the registered matcher (MCP tools, the Agent tool, any future host tool) are never routed to the hook at all, so no fail-closed path exists for them — this is stated here rather than left to be discovered. Semantic risks that do not match the implemented patterns defer to the host's normal permission flow.
 
 When the gate asks, it may append two best-effort context warnings to the text the user approves:
 
@@ -170,6 +173,8 @@ When the gate asks, Mary appends an `asked` event to `~/.claude/mary/approvals.j
 - the tool request;
 - a normalized request hash used for machine matching; and
 - the later result, when one is observed: `succeeded`, `failed`, `denied`, or `reconciled` — the last written by `scripts/mary-reconcile.js` when a human observed the real side effects afterwards, with the observation attached as evidence.
+
+The stored copies of the explanation and the request are **secret-masked** (recognized token shapes such as `Authorization:` headers, `key=value` assignments, and AWS/GitHub/Slack/JWT tokens are replaced before writing; masked entries carry `redacted: true`). The ledger is plaintext forever, and a gated `curl -H "Authorization: Bearer …"` would otherwise retain the token long after the command ran. The hash is computed over the raw input, so masking never breaks approval→outcome matching — and the dialog the human sees is the unmasked original. Masking is pattern-based and best-effort; unrecognized secret formats still land in plaintext (see the threat model).
 
 The result recorder only writes when a matching open `asked` entry exists. Tool calls that never passed the gate are not logged, so the ledger stays an approval record rather than a growing plaintext log of every command output.
 
@@ -244,6 +249,8 @@ Managed settings locations are:
 
 `allowManagedHooksOnly` blocks user, project, and other non-managed plugin hooks. Enable it only after considering every hook your environment requires.
 
+The managed install protects the **code**, not the **ledger**: `~/.claude/mary/approvals.jsonl` must stay writable by the user account the hooks run as, so it remains editable by anything with the user's file access. Every ledger write path the gate recognizes (redirection, `tee`, `sed -i`, interpreter one-liners) is gated, so an agent's forgery *attempt* surfaces as an approval dialog — but the ledger is evidence of what the hooks observed, not a tamper-proof audit log. This boundary is spelled out in [`docs/threat-model.md`](docs/threat-model.md).
+
 Even a properly managed installation covers only the hook events, tool names, and action patterns that Mary observes. Deciding whether a task is multi-step or whether a factual judgment controls the outcome remains a semantic decision that no pattern-only dispatcher can fully enforce.
 
 For Claude Code's current plugin and managed-settings behavior, see the official [plugin documentation](https://code.claude.com/docs/en/plugins), [plugin reference](https://code.claude.com/docs/en/plugins-reference), and [configuration reference](https://code.claude.com/docs/en/configuration).
@@ -300,6 +307,9 @@ The plugin components must stay together.
 | `scripts/install-managed.ps1` / `install-managed.sh` | One-command administrator (managed-settings) deployment |
 | `tests/gate.test.js` | Regression tests for the gate, ledger, result binding, and session report |
 | `tests/stats.test.js` | Regression tests for the counter auditor and promotion-candidate logic |
+| `docs/threat-model.md` | What is enforced, known bypasses (closed and open), what the ledger can and cannot prove |
+| `CHANGELOG.md` | Release history |
+| `.github/workflows/test.yml` | CI — both test suites on Node 20/22, Linux and Windows |
 
 ## Design principles
 
@@ -319,14 +329,14 @@ The plugin components must stay together.
 - The decision-retrace engine is specified but not implemented.
 - The hook recognizes a defined set of tools and patterns; it does not mediate every possible tool, command, external send, or business-system write.
 - The Bash self-protection check pairs a protected-path mention with a write indicator. It is a visibility heuristic, not a parser; a sufficiently indirect shell command can still avoid it.
-- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented. A denial that is never observed stays open and is reported as `unknown` at the next session start — `mary-reconcile.js` closes it once a human has observed what actually happened.
+- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented. **Observed so far (macOS build, 2026-07-26, 9 asked / 0 denied over real use): the event was never emitted** — manual denials stayed `unknown`. A denial that is never observed stays open and is reported as `unknown` at the next session start — `mary-reconcile.js` closes it once a human has observed what actually happened.
 - Cross-session warnings match by working-directory string. Two clones of the same remote in different folders are shared external state the gate cannot see.
 - The trifecta sentinel observes two legs (untrusted input, external send). Private-data access, the third, is not reliably detectable from tool calls and is deliberately not claimed.
 - A separate LLM reviewer may share the generator's biases. It is not a substitute for observable evidence.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.3.0 · Experimental**
+**Current version: Rv.0 / plugin 0.4.0 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
 
 Working now:
 
@@ -344,8 +354,11 @@ Working now:
 - verification-receipt auditing in `mary-stats.js`;
 - an optional "approval waiting" webhook ping (`Notification` hook, no command content);
 - one-command managed (administrator) deployment scripts;
-- a bundled read-only critic agent and a deterministic counter auditor; and
-- 109 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting.
+- a bundled read-only critic agent and a deterministic counter auditor;
+- a published threat model ([`docs/threat-model.md`](docs/threat-model.md)) covering demonstrated-and-closed bypasses and the surfaces open by construction;
+- secret masking on stored ledger copies, plugin-root-anchored self-protection, and a segment-aware `--dry-run` exemption;
+- continuous integration (GitHub Actions, Node 20/22 on Linux and Windows); and
+- 154 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting.
 
 In development:
 
@@ -356,7 +369,7 @@ Before a stable release:
 - validate Mary on 5–10 real product, legal, and research tasks;
 - confirm that a fresh session follows the same procedure;
 - verify installation and execution on macOS;
-- confirm empirically whether the host emits `PermissionDenied` on a manual denial;
+- confirm across hosts and platforms whether `PermissionDenied` is emitted on a manual denial (the macOS build observed on 2026-07-26 did not emit it);
 - measure missed and unnecessary automatic activation;
 - expand regression coverage beyond recognized shell patterns;
 - submit to the Anthropic community plugin marketplace ([anthropics/claude-plugins-community](https://github.com/anthropics/claude-plugins-community)); and

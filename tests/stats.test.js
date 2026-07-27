@@ -203,9 +203,59 @@ t('completed without any receipt is reported — the most likely failure is not 
   assert.ok(rr.warnings.some(x => x.includes('no verification receipt')));
 });
 t('completed with a valid receipt is not flagged as missing', () => {
-  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-005\n---\n' + RECEIPT_OK, '_work-r5.md');
+  const receipt = '```json\n' + JSON.stringify({
+    receipt: 'verification', task_id: '20260725-x-005',
+    items: [{ check: 'c', cmd: 'x', observed: 'y', pass: true }],
+  }) + '\n```\n';
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-005\n---\n' + receipt, '_work-r5.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('_work-r5.md')));
+});
+
+console.log('\n[counted_status literals — SKILL 5.3 canonical strings (B1)]');
+t('user-stopped is the canonical literal for paused', () => {
+  const w = parseWork('---\nstatus: paused\ncounted_status: user-stopped\ntask_id: 20260727-b1-001\n---\n', '_work-b1a.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('_work-b1a.md')));
+});
+t('abandoned belongs to the same bucket', () => {
+  const w = parseWork('---\nstatus: abandoned\ncounted_status: user-stopped\ntask_id: 20260727-b1-002\n---\n', '_work-b1b.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('_work-b1b.md')));
+});
+t('legacy "stopped" is accepted as an alias', () => {
+  const w = parseWork('---\nstatus: paused\ncounted_status: stopped\ntask_id: 20260727-b1-003\n---\n', '_work-b1c.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('_work-b1c.md')));
+});
+t('a wrong bucket still warns', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: user-stopped\ntask_id: 20260727-b1-004\n---\n', '_work-b1d.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('_work-b1d.md') && x.includes('counted_status')));
+});
+
+console.log('\n[judgment-only completion — SKILL stage 5 note ② (B2)]');
+t('judgment-only completed without a receipt is clean', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260727-b2-001\nverification: judgment-only\n---\nno receipt\n', '_work-b2a.md');
   const rr = analyze({ faillog: fl, works: [w] });
   assert.ok(!rr.warnings.some(x => x.includes('no verification receipt')));
+});
+t('the flag does not exempt a failing receipt', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-002\nverification: judgment-only\n---\n' + RECEIPT_FAILING, '_work-b2b.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('failing item')));
+});
+
+console.log('\n[receipt binding — a pasted-in receipt is not this task\'s evidence (C5)]');
+t('a receipt from another task is flagged', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260727-c5-001\n---\n' + RECEIPT_OK, '_work-c5a.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('does not match _work task_id')));
+});
+t('a matching receipt is not flagged', () => {
+  const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-001\n---\n' + RECEIPT_OK, '_work-c5b.md');
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('does not match _work task_id')));
 });
 
 console.log(`\n${pass} passed / ${fail} failed\n`);
