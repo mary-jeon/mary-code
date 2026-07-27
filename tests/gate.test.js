@@ -176,6 +176,71 @@ t('an absolute plugin-root mention asks from any cwd', () =>
   assert.strictEqual(decide(bashAt(`echo x > "${path.join(ROOT, 'hooks', 'hooks.json')}"`, 'C:/other-project')).decision, 'ask'));
 t('invoking mary-reconcile is itself gated', () =>
   assert.strictEqual(decide(bash('node scripts/mary-reconcile.js sha256:x --outcome ran --evidence e')).decision, 'ask'));
+t('notify.json is enforcement config: a write asks (any cwd)', () =>
+  assert.strictEqual(decide(write('C:/x/.claude/mary/notify.json')).decision, 'ask'));
+t('redirect into notify.json is caught (any cwd)', () =>
+  assert.strictEqual(decide(bash('echo {} > ~/.claude/mary/notify.json')).decision, 'ask'));
+t('an unrelated notify.json is not protected', () =>
+  assert.strictEqual(decide(write('C:/other-project/config/notify.json')).decision, 'defer'));
+
+console.log('\n[H-1 — a dry-run exemption must be a real argument of the push]');
+t('a commented-out --dry-run does not exempt', () =>
+  assert.strictEqual(decide(bash('git push origin main # --dry-run')).decision, 'ask'));
+t('a commented-out -n does not exempt', () =>
+  assert.strictEqual(decide(bash('git push origin main # -n')).decision, 'ask'));
+t('-n as the value of --push-option does not exempt', () =>
+  assert.strictEqual(decide(bash('git push -o -n origin main')).decision, 'ask'));
+t('-n inside a -c config value does not exempt', () =>
+  assert.strictEqual(decide(bash('git -c core.pager="less -n" push origin main')).decision, 'ask'));
+t('a quoted -c value no longer hides the push entirely', () =>
+  assert.strictEqual(decide(bash('git -c core.pager="less -n" push origin main')).category, 'external send'));
+t('a genuine clustered -nq is still a dry run', () =>
+  assert.strictEqual(decide(bash('git push -nq origin main')).decision, 'defer'));
+t('a genuine clustered -qn is still a dry run', () =>
+  assert.strictEqual(decide(bash('git push -qn origin main')).decision, 'defer'));
+t('--exec takes a value, a later -n still exempts', () =>
+  assert.strictEqual(decide(bash('git push --exec rp -n origin main')).decision, 'defer'));
+t('echo a#b is not a comment', () =>
+  assert.strictEqual(decide(bash('echo a#b')).decision, 'defer'));
+
+console.log('\n[H-2 — clustered interpreter and shell flags run code too]');
+t('bash -lc', () => assert.strictEqual(decide(bash('bash -lc "rm -rf /x"')).decision, 'ask'));
+t('sh -ec', () => assert.strictEqual(decide(bash('sh -ec "rm -rf /x"')).decision, 'ask'));
+t('zsh -ic', () => assert.strictEqual(decide(bash('zsh -ic "rm -rf /x"')).decision, 'ask'));
+t('bash --login -c', () => assert.strictEqual(decide(bash('bash --login -c "rm -rf /x"')).decision, 'ask'));
+t('bash --rcfile f -c', () => assert.strictEqual(decide(bash('bash --rcfile f -c "rm -rf /x"')).decision, 'ask'));
+t('python3 -Ic', () => assert.strictEqual(decide(bash('python3 -Ic "import shutil"')).decision, 'ask'));
+t('perl -we', () => assert.strictEqual(decide(bash('perl -we "unlink 1"')).decision, 'ask'));
+t('perl -E (code with features on)', () => assert.strictEqual(decide(bash('perl -E "unlink 1"')).decision, 'ask'));
+t('bash script.sh still defers', () => assert.strictEqual(decide(bash('bash script.sh')).decision, 'defer'));
+t('bash -O extglob script.sh still defers', () =>
+  assert.strictEqual(decide(bash('bash -O extglob script.sh')).decision, 'defer'));
+t('python3 -B runs a file, not inline code', () =>
+  assert.strictEqual(decide(bash('python3 -B script.py')).decision, 'defer'));
+t('node -r preloads a module for a script file', () =>
+  assert.strictEqual(decide(bash('node -r ts-node/register app.js')).decision, 'defer'));
+
+console.log('\n[H-3 — quoting the command word must not defeat the anchors]');
+t('"rm" -rf', () => assert.strictEqual(decide(bash('"rm" -rf /d')).decision, 'ask'));
+t("'rm' -rf", () => assert.strictEqual(decide(bash("'rm' -rf /d")).decision, 'ask'));
+t('r\\m -rf (backslash escape)', () => assert.strictEqual(decide(bash('r\\m -rf /d')).decision, 'ask'));
+t('an absolute quoted path', () => assert.strictEqual(decide(bash('"/bin/rm" /x')).decision, 'ask'));
+t('a quoted subcommand after git', () =>
+  assert.strictEqual(decide(bash('git "push" origin main')).decision, 'ask'));
+t('a quoted command after a wrapper', () =>
+  assert.strictEqual(decide(bash('sudo "rm" -rf /x')).decision, 'ask'));
+t('a quoted command in a subshell', () =>
+  assert.strictEqual(decide(bash('("rm" -rf /tmp/x)')).decision, 'ask'));
+t('a quoted ARGUMENT is still just an argument', () =>
+  assert.strictEqual(decide(bash('echo "rm -rf /"')).decision, 'defer'));
+t('a dangerous word in a commit message stays an argument', () =>
+  assert.strictEqual(decide(bash('git commit -m "rm -rf fix"')).decision, 'defer'));
+t('grep for a dangerous word is a search', () =>
+  assert.strictEqual(decide(bash('grep -r "rm" .')).decision, 'defer'));
+t('a quoted benign command word is untouched', () =>
+  assert.strictEqual(decide(bash('"echo" hi')).decision, 'defer'));
+t('an assignment prefix does not shift the command position', () =>
+  assert.strictEqual(decide(bash('FOO="a b" ls')).decision, 'defer'));
 
 console.log('\n[fail-closed — cannot judge is not a pass]');
 t('broken JSON',       () => assert.strictEqual(decisionOf('{"tool_name":'), 'ask'));

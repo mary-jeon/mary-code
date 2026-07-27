@@ -56,11 +56,174 @@ function splitSegments(cmd) {
 }
 
 /* git accepts global options between `git` and the subcommand
- * (`git -C /repo push`). Requiring adjacency would exempt exactly those forms. */
-const GIT = '\\bgit(?:\\s+(?:-C\\s+\\S+|-c\\s+\\S+|--git-dir(?:=|\\s+)\\S+|--work-tree(?:=|\\s+)\\S+|--namespace(?:=|\\s+)\\S+|--no-pager|--paginate|-[pP]))*\\s+';
+ * (`git -C /repo push`). Requiring adjacency would exempt exactly those forms.
+ *
+ * A value may be quoted and contain spaces (`git -c core.pager="less -n" push`),
+ * so an option value is "a quoted run or a bare run of non-space" rather than
+ * plain \S+ — otherwise the whole GIT prefix fails to match and the push
+ * becomes invisible to the registry rather than merely unexempted. */
+const GIT_VAL = '(?:"[^"]*"|\'[^\']*\'|\\S)+';
+const GIT = '\\bgit(?:\\s+(?:-C\\s+' + GIT_VAL + '|-c\\s+' + GIT_VAL
+  + '|--git-dir(?:=|\\s+)' + GIT_VAL + '|--work-tree(?:=|\\s+)' + GIT_VAL
+  + '|--namespace(?:=|\\s+)' + GIT_VAL + '|--no-pager|--paginate|-[pP]))*\\s+';
 const GIT_PUSH_RE = new RegExp(GIT + 'push\\b', 'i');
-const DRY_RUN_RE = /(^|\s)(--dry-run|-n)\b/;
+/* A dry-run exemption is only honoured when the flag is a real argument of the
+ * push itself. Testing the raw segment for /--dry-run|-n/ is exempted by three
+ * shapes that all still push for real:
+ *
+ *   git push origin main # --dry-run      the flag is in a comment
+ *   git push -o -n origin main            -n is the VALUE of --push-option
+ *   git -c core.pager="less -n" push …    -n belongs to a config value
+ *
+ * So: drop comments, tokenize quote-aware, look only at tokens after `push`,
+ * and respect options that consume the next token. Every branch here only ever
+ * withholds the exemption, so a parse we get wrong errs toward asking. */
 
+/** Truncate each line at an unquoted `#` that begins a word (`echo a#b` is safe). */
+function stripComments(s) {
+  let out = '', q = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === '\\' && q === '"' && i + 1 < s.length) { out += c + s[++i]; continue; }
+      if (c === q) q = null;
+      out += c;
+      continue;
+    }
+    if (c === '"' || c === "'") { q = c; out += c; continue; }
+    if (c === '\\' && i + 1 < s.length) { out += c + s[++i]; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(s[i - 1]))) {
+      while (i < s.length && s[i] !== '\n') i++;
+      if (i < s.length) out += '\n';
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+/** Split on whitespace, honouring quotes and backslash escapes. */
+function tokenize(s) {
+  const out = [];
+  let cur = '', q = null, started = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === '\\' && q === '"' && i + 1 < s.length) { cur += s[++i]; continue; }
+      if (c === q) { q = null; continue; }
+      cur += c;
+      continue;
+    }
+    if (c === '"' || c === "'") { q = c; started = true; continue; }
+    if (c === '\\' && i + 1 < s.length) { cur += s[++i]; started = true; continue; }
+    if (/\s/.test(c)) { if (cur || started) { out.push(cur); cur = ''; started = false; } continue; }
+    cur += c;
+    started = true;
+  }
+  if (cur || started) out.push(cur);
+  return out;
+}
+
+/* git push options whose value is the FOLLOWING token. A value is never a flag,
+ * so `-o -n` is a push option named "-n", not a dry run. */
+const PUSH_VALUE_LONG = new Set(['--push-option', '--repo', '--exec', '--receive-pack']);
+const PUSH_VALUE_SHORT = 'o';
+
+/** True only when `push` in this segment carries a genuine dry-run flag. */
+function gitPushIsDryRun(seg) {
+  const tok = tokenize(stripComments(seg));
+  const i0 = tok.indexOf('push');
+  let i = i0;
+  if (i < 0) return false;
+  for (i += 1; i < tok.length; i++) {
+    const t = tok[i];
+    if (t === '--') return false;                       // rest are refspecs
+    if (t === '--dry-run' || t.startsWith('--dry-run=')) return true;
+    if (PUSH_VALUE_LONG.has(t)) { i++; continue; }      // consume the value
+    if (/^--/.test(t)) continue;
+    if (/^-.+/.test(t)) {
+      let consumes = false;
+      for (let k = 1; k < t.length; k++) {
+        if (t[k] === PUSH_VALUE_SHORT) {
+          // `-o` takes a value: the rest of the cluster, or the next token.
+          consumes = k === t.length - 1;
+          break;
+        }
+        if (t[k] === 'n') return true;
+      }
+      if (consumes) i++;
+      continue;
+    }
+    if (t === '-') continue;
+  }
+  return false;
+}
+
+/* ── Command-position normalization (H-3) ───────────────────────────
+ * Every pattern below anchors on `(^|[\s;&|])name`, which the shell's own
+ * quote removal defeats: `"rm" -rf /d`, `'rm' -rf /d` and `r\m -rf /d` all
+ * execute rm, but none of them contain the bare word `rm` at a word boundary.
+ *
+ * Normalizing the WHOLE string would be worse than the bug: `echo "rm -rf /"`
+ * would become a deletion. Quotes are only removed from the FIRST word of each
+ * segment — the command position — where quoting has no meaning other than
+ * evading a matcher. Argument quoting is left exactly as written.
+ *
+ * The normalized string is matched IN ADDITION to the raw one, so this can
+ * only ever add an ask, never remove one. */
+/* Commands that run another command, so the word AFTER them is still a command
+ * position. `git` is here because the registry matches its subcommand as a
+ * word (`git "push"` hides the subcommand the same way quoting hides `rm`). */
+const CMD_POSITION_PREFIX = new Set([
+  'sudo', 'doas', 'env', 'command', 'time', 'nohup', 'setsid', 'nice', 'ionice',
+  'timeout', 'stdbuf', 'xargs', 'watch', 'flock', 'taskset', 'su', 'pkexec',
+  'runuser', 'chrt', 'exec', 'git',
+]);
+
+/** Remove quoting/escaping from a word, or return null if it is not a plain name. */
+function bareCommandName(word) {
+  if (!/["'\\]/.test(word)) return null;
+  const bare = word.replace(/"([^"]*)"|'([^']*)'|\\(.)/g,
+    (_, d, s, e) => (d !== undefined ? d : s !== undefined ? s : e));
+  // Only a plain command name may be substituted. Anything with shell
+  // metacharacters or whitespace is an argument, not a command word.
+  return /^[\w.\-+]+$|^[\\/]?(?:[\w.\-+]+[\\/])+[\w.\-+]+$/.test(bare) ? bare : null;
+}
+
+function unquoteCommandWord(seg) {
+  const m = /^(\s*)((?:[A-Za-z_][\w]*=(?:"[^"]*"|'[^']*'|\S)*\s+)*)(.*)$/s.exec(seg);
+  if (!m) return seg;
+  const [, lead, assigns, rest0] = m;
+  // A leading `(`/`{`/`!` is not part of the command name, and it is not in the
+  // registry's `(^|[\s;&|])` anchor class either. Replace the run with a space:
+  // the normalized string exists only to be matched.
+  const open = /^[([{!]+\s*/.exec(rest0);
+  const prefix = open ? ' ' : '';
+  let body = open ? rest0.slice(open[0].length) : rest0;
+
+  let out = '';
+  for (;;) {
+    const ws = /^\s*/.exec(body)[0];
+    const w = /^(?:"[^"]*"|'[^']*'|\\.|[^\s"'\\])+/.exec(body.slice(ws.length));
+    if (!w) break;
+    const word = w[0];
+    const bare = bareCommandName(word);
+    out += ws + (bare === null ? word : bare);
+    body = body.slice(ws.length + word.length);
+    const name = (bare === null ? word : bare).replace(/^.*[\\/]/, '').toLowerCase();
+    if (CMD_POSITION_PREFIX.has(name)) continue;   // next word is still a command
+    if (/^-/.test(word)) continue;                 // an option of that wrapper
+    break;
+  }
+  return lead + assigns + prefix + out + body;
+}
+
+/** The command as the shell would see it in command position, per segment. */
+function normalizeCommandWords(cmd) {
+  return String(cmd).split(/(&&|\|\||[;|\n])/)
+    .map(p => (/^(&&|\|\||[;|\n])$/.test(p) ? p : unquoteCommandWord(p)))
+    .join('');
+}
 /* ── Action registry ────────────────────────────────────────────────
  * The tool name is the first-order judgment. Command patterns are only a
  * second-order signal inside Bash. Category vocabulary matches SKILL.md stage 0 (a).
@@ -78,8 +241,9 @@ const BASH_PATTERNS = [
   { re: /(^|[\s;&|])(\S*[\\/])?truncate\b/i,             category: 'overwrite' },
   // Per-segment: --dry-run only exempts the segment it appears in. Tested
   // against segments so a real push cannot hide behind an exempting string
-  // in a neighboring command. -n is git's own short form of --dry-run.
-  { test: cmd => splitSegments(cmd).some(s => GIT_PUSH_RE.test(s) && !DRY_RUN_RE.test(s)),
+  // in a neighboring command. The exemption itself is parsed, not pattern-
+  // matched, so a commented-out or borrowed `-n` cannot buy it.
+  { test: cmd => splitSegments(cmd).some(s => GIT_PUSH_RE.test(s) && !gitPushIsDryRun(s)),
     category: 'external send' },
   { re: new RegExp(GIT + '(reset\\s+--hard|clean\\s+-\\w*[fdx])', 'i'), category: 'overwrite' },
   { re: new RegExp(GIT + '(commit|push)\\b[^\\n]*--no-verify', 'i'),    category: 'gate bypass' },
@@ -106,12 +270,28 @@ const BASH_PATTERNS = [
   // One layer of shell wrapping or encoding neutralizes every pattern above
   // (L12 encoding-obfuscation). The wrapped content cannot be judged, so the
   // wrapping itself is treated as "cannot judge → ask".
-  { re: /\b(bash|sh|zsh|dash)\s+-c\b/i,                  category: 'gate bypass' },
+  // Short options cluster: `bash -lc "…"`, `sh -ec "…"`, `zsh -ic "…"` all run
+  // the string exactly like `-c` does, and long forms may precede it
+  // (`bash --login -c`). Requiring a standalone `-c` matched none of them.
+  { re: /\b(bash|sh|zsh|dash|ksh)(\.exe)?\b(\s+(--?[\w-]+(=\S*)?|[^\s-]\S*))*\s+-[a-zA-Z]*c\b/i, category: 'gate bypass' },
   // Interpreter one-liners are shell wrapping with a different binary:
   // `python -c "shutil.rmtree(…)"` deletes like rm and `node -e` can append to
   // any file — including this gate's own ledger. Judging them differently from
   // `bash -c` would contradict the rule above.
-  { re: /\b(python3?|node|nodejs|deno|bun|perl|ruby|php)(\.exe)?\b[^\n]*\s(-c|-e|--eval)\b/i,
+  // Same clustering applies to interpreters: `perl -we`, `python3 -Ic`,
+  // `python -Sc`, `ruby -we`. Only options that carry CODE belong here.
+  //
+  // Two separate entries because case matters for one of them and not the
+  // other: `-c`/`-e` are code on every interpreter here, but the uppercase
+  // pair is perl's `-E` and php's `-R` specifically — folding case would make
+  // `-r` (node's module preload, which runs a FILE) look like code and ask on
+  // ordinary `node -r ts-node/register app.js`. The code letter must also END
+  // the cluster, the way an option that takes a value does.
+  { re: /\b(python3?|node|nodejs|deno|bun|perl|ruby|php)(\.exe)?\b[^\n]*\s-[a-zA-Z]*[ce](?=[\s"'=]|$)/i,
+    category: 'gate bypass' },
+  { re: /\b(perl|php)(\.exe)?\b[^\n]*\s-[a-zA-Z]*[ER](?=[\s"'=]|$)/,
+    category: 'gate bypass' },
+  { re: /\b(python3?|node|nodejs|deno|bun|perl|ruby|php)(\.exe)?\b[^\n]*\s--eval\b/i,
     category: 'gate bypass' },
   { re: /\b(powershell|pwsh)(\.exe)?\b[^\n]*\s-e(nc|ncodedcommand)?\b/i, category: 'gate bypass' },
   { re: /(^|[\s;&|])(iex|invoke-expression)\b/i,         category: 'gate bypass' },
@@ -127,7 +307,11 @@ const BASH_PATTERNS = [
 ];
 
 function patternHits(cmd) {
-  return BASH_PATTERNS.filter(p => (p.re ? p.re.test(cmd) : p.test(cmd)));
+  const raw = String(cmd);
+  const norm = normalizeCommandWords(raw);
+  const match = p => (p.re ? p.re.test(raw) : p.test(raw))
+    || (norm !== raw && (p.re ? p.re.test(norm) : p.test(norm)));
+  return BASH_PATTERNS.filter(match);
 }
 
 /* ── Self-protection ────────────────────────────────────────────────
@@ -159,6 +343,11 @@ const SELF_PROTECTED = [
   /[\\/]\.claude[\\/]settings(\.local)?\.json$/i,
   /[\\/]managed-settings\.json$/i,
   /[\\/]mary[\\/]approvals\.jsonl$/i,
+  // notify.json is enforcement config too: it names the URL and headers the
+  // notifier POSTs to. A quiet edit turns every approval prompt into an
+  // outbound ping to an attacker-chosen endpoint, so it is protected like
+  // the ledger — at any path.
+  /[\\/]mary[\\/]notify\.json$/i,
   // plugin enforcement files: anchored to this plugin's install root.
   // scripts/ covers the hooks, the reconcile CLI, the receipt auditor, and the
   // managed installers — the whole ledger-integrity chain.
@@ -176,6 +365,7 @@ const BASH_SELF_PROTECTED = [
   /\.claude[\\/]settings(\.local)?\.json/i,
   /managed-settings\.json/i,
   /mary[\\/]approvals\.jsonl/i,
+  /mary[\\/]notify\.json/i,
 ];
 const BASH_SELF_PROTECTED_ROOT = new RegExp(
   ROOT_RE + '[\\\\/](scripts[\\\\/]|hooks[\\\\/]hooks\\.json|\\.claude-plugin[\\\\/]plugin\\.json)', 'i');
