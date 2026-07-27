@@ -19,6 +19,11 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mary-test-'));
 process.env.MARY_DIR = TMP;
 
 const ROOT = path.join(__dirname, '..');
+// A cwd that is absolute AND outside the plugin root on every platform. A
+// hardcoded 'C:/other-project' is only absolute on Windows; on POSIX
+// path.resolve() folds it back under the repo root, so the gate correctly
+// judges it as inside the plugin root and the test asserts the wrong thing.
+const OUTSIDE = path.resolve(ROOT, '..', 'other-project');
 const GATE = path.join(ROOT, 'scripts', 'hooks', 'mary-irreversible-gate.js');
 const RECORDER = path.join(ROOT, 'scripts', 'hooks', 'mary-outcome-recorder.js');
 const REPORT = path.join(ROOT, 'scripts', 'hooks', 'mary-session-report.js');
@@ -158,7 +163,7 @@ t('unrelated repo .claude-plugin write defers', () =>
 t('relative write from inside the plugin root asks', () =>
   assert.strictEqual(decide(writeAt(path.join('scripts', 'hooks', 'x.js'), ROOT)).decision, 'ask'));
 t('relative write from an unrelated cwd defers', () =>
-  assert.strictEqual(decide(writeAt('scripts/hooks/x.js', 'C:/other-project')).decision, 'defer'));
+  assert.strictEqual(decide(writeAt(path.join('scripts', 'hooks', 'x.js'), OUTSIDE)).decision, 'defer'));
 
 console.log('\n[self-protection — Bash routes are caught too]');
 t('redirect into hooks.json (cwd = plugin root)', () => assert.strictEqual(decide(bashAt('echo x > hooks/hooks.json', ROOT)).decision, 'ask'));
@@ -171,9 +176,9 @@ t('redirect into the ledger is caught (any cwd)', () => assert.strictEqual(decid
 t('reading the ledger defers', () => assert.strictEqual(decide(bash('cat ~/.claude/mary/approvals.jsonl')).decision, 'defer'));
 t('sed -i on the receipt auditor is caught (cwd = plugin root)', () => assert.strictEqual(decide(bashAt('sed -i s/a/b/ scripts/mary-stats.js', ROOT)).decision, 'ask'));
 t('the same relative mention from an unrelated cwd defers', () =>
-  assert.strictEqual(decide(bashAt('echo x > hooks/hooks.json', 'C:/other-project')).decision, 'defer'));
+  assert.strictEqual(decide(bashAt('echo x > hooks/hooks.json', OUTSIDE)).decision, 'defer'));
 t('an absolute plugin-root mention asks from any cwd', () =>
-  assert.strictEqual(decide(bashAt(`echo x > "${path.join(ROOT, 'hooks', 'hooks.json')}"`, 'C:/other-project')).decision, 'ask'));
+  assert.strictEqual(decide(bashAt(`echo x > "${path.join(ROOT, 'hooks', 'hooks.json')}"`, OUTSIDE)).decision, 'ask'));
 t('invoking mary-reconcile is itself gated', () =>
   assert.strictEqual(decide(bash('node scripts/mary-reconcile.js sha256:x --outcome ran --evidence e')).decision, 'ask'));
 
