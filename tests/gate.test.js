@@ -231,8 +231,22 @@ t('a quoted command after a wrapper', () =>
   assert.strictEqual(decide(bash('sudo "rm" -rf /x')).decision, 'ask'));
 t('a quoted command in a subshell', () =>
   assert.strictEqual(decide(bash('("rm" -rf /tmp/x)')).decision, 'ask'));
+t('a quoted command after an env assignment asks', () =>
+  assert.strictEqual(decide(bash('env MODE=test "rm" -rf /tmp/x')).decision, 'ask'));
+t('a quoted command after a sudo option value asks', () =>
+  assert.strictEqual(decide(bash('sudo -u root "rm" -rf /tmp/x')).decision, 'ask'));
+t('a quoted command after a timeout duration asks', () =>
+  assert.strictEqual(decide(bash('timeout 5 "rm" -rf /tmp/x')).decision, 'ask'));
+t('a quoted git subcommand after a global option value asks', () =>
+  assert.strictEqual(decide(bash('git -C /tmp/repo "push" origin main')).decision, 'ask'));
 t('a quoted ARGUMENT is still just an argument', () =>
   assert.strictEqual(decide(bash('echo "rm -rf /"')).decision, 'defer'));
+t('a quoted pipe remains argument text', () =>
+  assert.strictEqual(decide(bash('echo \'safe | "rm" -rf /tmp/x\'')).decision, 'defer'));
+t('a quoted && remains argument text', () =>
+  assert.strictEqual(decide(bash('echo \'safe && "rm" -rf /tmp/x\'')).decision, 'defer'));
+t('a quoted semicolon remains argument text', () =>
+  assert.strictEqual(decide(bash('printf "%s" \'safe; "rm" -rf /tmp/x\'')).decision, 'defer'));
 t('a dangerous word in a commit message stays an argument', () =>
   assert.strictEqual(decide(bash('git commit -m "rm -rf fix"')).decision, 'defer'));
 t('grep for a dangerous word is a search', () =>

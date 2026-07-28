@@ -180,6 +180,44 @@ const CMD_POSITION_PREFIX = new Set([
   'runuser', 'chrt', 'exec', 'git',
 ]);
 
+/* Wrapper options that consume the following token. Without this grammar,
+ * `sudo -u root "rm"` stops at `root` and never reaches the real command.
+ * Attached/equals values do not consume another token. */
+const WRAPPER_VALUE_OPTIONS = new Map([
+  ['sudo', new Set(['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt',
+    '-C', '--close-from', '-R', '--chroot', '-T', '--command-timeout', '-r', '--role',
+    '-t', '--type'])],
+  ['doas', new Set(['-u'])],
+  ['env', new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string'])],
+  ['nice', new Set(['-n', '--adjustment'])],
+  ['ionice', new Set(['-c', '--class', '-n', '--classdata', '-t', '--ignore'])],
+  ['timeout', new Set(['-k', '--kill-after', '-s', '--signal'])],
+  ['stdbuf', new Set(['-i', '--input', '-o', '--output', '-e', '--error'])],
+  ['xargs', new Set(['-a', '--arg-file', '-E', '--eof', '-I', '--replace', '-L',
+    '--max-lines', '-n', '--max-args', '-P', '--max-procs', '-s', '--max-chars'])],
+  ['watch', new Set(['-n', '--interval', '-x', '--exec', '-e', '--errexit'])],
+  ['flock', new Set(['-w', '--wait', '-E', '--conflict-exit-code'])],
+  ['taskset', new Set(['-c', '--cpu-list'])],
+  ['pkexec', new Set(['--user'])],
+  ['runuser', new Set(['-u', '--user', '-g', '--group', '-G', '--supp-group'])],
+  ['chrt', new Set(['-p', '--pid', '-T', '--sched-runtime', '-P', '--sched-period',
+    '-D', '--sched-deadline'])],
+  ['git', new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace',
+    '--exec-path'])],
+]);
+
+/* Wrappers with a required positional operand before the nested command. */
+const WRAPPER_POSITIONAL_OPERANDS = new Map([
+  ['timeout', 1], // duration
+  ['flock', 1],   // lock file or file descriptor
+  ['chrt', 1],    // priority for the common policy+priority form
+]);
+
+function wrapperOptionConsumesNext(wrapper, word) {
+  if (word.includes('=')) return false;
+  return WRAPPER_VALUE_OPTIONS.get(wrapper)?.has(word) || false;
+}
+
 /** Remove quoting/escaping from a word, or return null if it is not a plain name. */
 function bareCommandName(word) {
   if (!/["'\\]/.test(word)) return null;
@@ -202,6 +240,9 @@ function unquoteCommandWord(seg) {
   let body = open ? rest0.slice(open[0].length) : rest0;
 
   let out = '';
+  let wrapper = null;
+  let consumeWrapperValue = false;
+  let positionalOperands = 0;
   for (;;) {
     const ws = /^\s*/.exec(body)[0];
     const w = /^(?:"[^"]*"|'[^']*'|\\.|[^\s"'\\])+/.exec(body.slice(ws.length));
@@ -210,18 +251,63 @@ function unquoteCommandWord(seg) {
     const bare = bareCommandName(word);
     out += ws + (bare === null ? word : bare);
     body = body.slice(ws.length + word.length);
-    const name = (bare === null ? word : bare).replace(/^.*[\\/]/, '').toLowerCase();
-    if (CMD_POSITION_PREFIX.has(name)) continue;   // next word is still a command
-    if (/^-/.test(word)) continue;                 // an option of that wrapper
+    const rendered = bare === null ? word : bare;
+    const name = rendered.replace(/^.*[\\/]/, '').toLowerCase();
+
+    if (consumeWrapperValue) {
+      consumeWrapperValue = false;
+      continue;
+    }
+    if (wrapper === 'env' && /^[A-Za-z_][\w]*=/.test(rendered)) continue;
+    if (wrapper && /^-/.test(rendered)) {
+      consumeWrapperValue = wrapperOptionConsumesNext(wrapper, rendered);
+      continue;
+    }
+    if (wrapper && positionalOperands > 0) {
+      positionalOperands--;
+      continue;
+    }
+    if (CMD_POSITION_PREFIX.has(name)) {
+      wrapper = name;
+      positionalOperands = WRAPPER_POSITIONAL_OPERANDS.get(name) || 0;
+      continue;
+    }
     break;
   }
   return lead + assigns + prefix + out + body;
 }
 
+/** Split only on shell separators outside quotes and backslash escapes. */
+function commandParts(cmd) {
+  const s = String(cmd);
+  const out = [];
+  let start = 0, q = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === '\\' && q === '"' && i + 1 < s.length) { i++; continue; }
+      if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (c === '\\' && i + 1 < s.length) { i++; continue; }
+    let n = 0;
+    if ((c === '&' || c === '|') && s[i + 1] === c) n = 2;
+    else if (c === '&' || c === '|' || c === ';' || c === '\n') n = 1;
+    if (!n) continue;
+    if (start < i) out.push({ text: s.slice(start, i), separator: false });
+    out.push({ text: s.slice(i, i + n), separator: true });
+    i += n - 1;
+    start = i + 1;
+  }
+  if (start < s.length) out.push({ text: s.slice(start), separator: false });
+  return out;
+}
+
 /** The command as the shell would see it in command position, per segment. */
 function normalizeCommandWords(cmd) {
-  return String(cmd).split(/(&&|\|\||[;|\n])/)
-    .map(p => (/^(&&|\|\||[;|\n])$/.test(p) ? p : unquoteCommandWord(p)))
+  return commandParts(cmd)
+    .map(p => (p.separator ? p.text : unquoteCommandWord(p.text)))
     .join('');
 }
 /* ── Action registry ────────────────────────────────────────────────
