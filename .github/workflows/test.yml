@@ -2,12 +2,15 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 jobs:
   test:
     strategy:
+      # Without this, one fast-failing leg cancels the others and the
+      # remaining platforms are never actually verified.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         node: [20, 22]
