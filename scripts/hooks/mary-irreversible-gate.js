@@ -67,6 +67,12 @@ const GIT = '\\bgit(?:\\s+(?:-C\\s+' + GIT_VAL + '|-c\\s+' + GIT_VAL
   + '|--git-dir(?:=|\\s+)' + GIT_VAL + '|--work-tree(?:=|\\s+)' + GIT_VAL
   + '|--namespace(?:=|\\s+)' + GIT_VAL + '|--no-pager|--paginate|-[pP]))*\\s+';
 const GIT_PUSH_RE = new RegExp(GIT + 'push\\b', 'i');
+/* Command-position form. `GIT` alone starts with `\bgit`, which also matches the
+ * word inside quoted argument text — `echo "git push"` used to ask because of
+ * it (closed in 0.4.4: the push entry now matches against stripQuotedSpans).
+ * New entries use this form so they do not add that noise: a gate that cries
+ * wolf trains the user to approve without reading. */
+const GIT_CMD = '(?:^|[\\s;&|])' + GIT;
 /* A dry-run exemption is only honoured when the flag is a real argument of the
  * push itself. Testing the raw segment for /--dry-run|-n/ is exempted by three
  * shapes that all still push for real:
@@ -159,6 +165,27 @@ function gitPushIsDryRun(seg) {
   return false;
 }
 
+/* `git restore` overwrites the working tree from the index or a commit — the
+ * uncommitted edits it discards were never recorded anywhere, so nothing can
+ * bring them back. The one exception is `--staged` WITHOUT `--worktree`: that
+ * only unstages, leaving file contents untouched, which is why it is exempted
+ * rather than the whole subcommand being registered. */
+const GIT_RESTORE_RE = new RegExp(GIT_CMD + 'restore\\b', 'i');
+
+function gitRestoreIsUnstageOnly(seg) {
+  const tok = tokenize(stripComments(seg));
+  const i0 = tok.indexOf('restore');
+  if (i0 < 0) return false;
+  let staged = false;
+  for (let i = i0 + 1; i < tok.length; i++) {
+    const t = tok[i];
+    if (t === '--') break;
+    if (t === '--staged' || t === '-S') staged = true;
+    if (t === '--worktree' || t === '-W') return false;
+  }
+  return staged;
+}
+
 /* ── Command-position normalization (H-3) ───────────────────────────
  * Every pattern below anchors on `(^|[\s;&|])name`, which the shell's own
  * quote removal defeats: `"rm" -rf /d`, `'rm' -rf /d` and `r\m -rf /d` all
@@ -218,10 +245,22 @@ function wrapperOptionConsumesNext(wrapper, word) {
   return WRAPPER_VALUE_OPTIONS.get(wrapper)?.has(word) || false;
 }
 
+/* A redirection may PRECEDE the command word (`>/dev/null "rm" -rf /d` runs rm)
+ * and may sit between a wrapper and its nested command (`sudo >/dev/null "rm"`).
+ * Without this the normalizer stops at the redirection and never reaches the
+ * command word — the H-3 anchors are defeated again by a different route.
+ * Operator alone (`> out.txt`) also consumes the following word; operator with
+ * an attached target (`>/dev/null`, `2>&1`) does not. */
+const REDIR_OPERATOR_ONLY = /^(?:[0-9]*(?:>>|>&|>|<&|<)|&>>|&>)$/;
+const REDIR_WITH_TARGET = /^(?:[0-9]*(?:>>|>&|>|<&|<)|&>>|&>)\S/;
+
 /** Remove quoting/escaping from a word, or return null if it is not a plain name. */
 function bareCommandName(word) {
   if (!/["'\\]/.test(word)) return null;
-  const bare = word.replace(/"([^"]*)"|'([^']*)'|\\(.)/g,
+  // ANSI-C and locale quoting put a `$` in front of the quote: `$'rm'` and
+  // `$"rm"` both execute rm. Dropping the `$` before an opening quote is what
+  // lets the plain-name test below see the name instead of `$rm`.
+  const bare = word.replace(/\$(?=["'])/g, '').replace(/"([^"]*)"|'([^']*)'|\\(.)/g,
     (_, d, s, e) => (d !== undefined ? d : s !== undefined ? s : e));
   // Only a plain command name may be substituted. Anything with shell
   // metacharacters or whitespace is an argument, not a command word.
@@ -242,6 +281,7 @@ function unquoteCommandWord(seg) {
   let out = '';
   let wrapper = null;
   let consumeWrapperValue = false;
+  let consumeRedirTarget = false;
   let positionalOperands = 0;
   for (;;) {
     const ws = /^\s*/.exec(body)[0];
@@ -253,6 +293,14 @@ function unquoteCommandWord(seg) {
     body = body.slice(ws.length + word.length);
     const rendered = bare === null ? word : bare;
     const name = rendered.replace(/^.*[\\/]/, '').toLowerCase();
+
+    if (consumeRedirTarget) {
+      consumeRedirTarget = false;
+      continue;
+    }
+    // A redirection is not the command word — the command word is still ahead.
+    if (REDIR_OPERATOR_ONLY.test(rendered)) { consumeRedirTarget = true; continue; }
+    if (REDIR_WITH_TARGET.test(rendered)) continue;
 
     if (consumeWrapperValue) {
       consumeWrapperValue = false;
@@ -293,6 +341,12 @@ function commandParts(cmd) {
     if (c === '\\' && i + 1 < s.length) { i++; continue; }
     let n = 0;
     if ((c === '&' || c === '|') && s[i + 1] === c) n = 2;
+    // `&` that is part of a redirection is not a command separator: `2>&1`,
+    // `>&file`, `<&0` (fd duplication, `&` preceded by `>`/`<`) and `&>`/`&>>`
+    // (redirect-all, `&` followed by `>`). Splitting there cut `2>&1 "rm" -rf`
+    // into a segment whose command word was `1` — the redirection walker never
+    // saw the token and the quoted command word was never unquoted.
+    else if (c === '&' && (s[i - 1] === '>' || s[i - 1] === '<' || s[i + 1] === '>')) continue;
     else if (c === '&' || c === '|' || c === ';' || c === '\n') n = 1;
     if (!n) continue;
     if (start < i) out.push({ text: s.slice(start, i), separator: false });
@@ -302,6 +356,18 @@ function commandParts(cmd) {
   }
   if (start < s.length) out.push({ text: s.slice(start), separator: false });
   return out;
+}
+
+/** Replace quoted spans with an inert placeholder WORD. For registry words that
+ * also live in ordinary English (`truncate`, `FLUSHALL`, `git push`), a quoted
+ * occurrence is argument text — but a quoted COMMAND word has already been
+ * unquoted into the normalized string, which patternHits tests too, so the
+ * replacement removes prose without un-catching `"truncate" -s 0 f`.
+ * A word, not a space: an option's quoted value must still occupy its value
+ * slot — erasing it left `git -C "/repo" push` as `-C   push`, and the option
+ * pattern consumed `push` as the value of `-C`. */
+function stripQuotedSpans(s) {
+  return String(s).replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '_q_');
 }
 
 /** The command as the shell would see it in command position, per segment. */
@@ -324,22 +390,91 @@ const BASH_PATTERNS = [
   { re: /(^|[\s;&|])(\S*[\\/])?(rmdir|del|Remove-Item|Clear-Content)\b/i, category: 'deletion' },
   { re: /(^|[\s;&|])find\b[^\n]*\s-delete\b/i,           category: 'deletion' },
   { re: /(^|[\s;&|])(\S*[\\/])?shred\b/i,                category: 'deletion' },
-  { re: /(^|[\s;&|])(\S*[\\/])?truncate\b/i,             category: 'overwrite' },
+  // `truncate` is also an English verb; the raw-string test fired inside
+  // quoted prose ("please truncate the file"). Quoted spans are argument text —
+  // a quoted COMMAND word has already been unquoted into the normalized string
+  // patternHits also tests, so `"truncate" -s 0 f` still asks.
+  { test: cmd => /(^|[\s;&|])(\S*[\\/])?truncate\b/i.test(stripQuotedSpans(cmd)),
+    category: 'overwrite' },
   // Per-segment: --dry-run only exempts the segment it appears in. Tested
   // against segments so a real push cannot hide behind an exempting string
   // in a neighboring command. The exemption itself is parsed, not pattern-
   // matched, so a commented-out or borrowed `-n` cannot buy it.
-  { test: cmd => splitSegments(cmd).some(s => GIT_PUSH_RE.test(s) && !gitPushIsDryRun(s)),
+  // The push MATCH ignores quoted spans (`echo "git push"` is prose — the same
+  // rule as truncate/FLUSHALL below; a quoted command word is already unquoted
+  // in the normalized string patternHits also feeds through here). The dry-run
+  // exemption still parses the segment as given.
+  { test: cmd => splitSegments(cmd).some(s => GIT_PUSH_RE.test(stripQuotedSpans(s)) && !gitPushIsDryRun(s)),
     category: 'external send' },
   { re: new RegExp(GIT + '(reset\\s+--hard|clean\\s+-\\w*[fdx])', 'i'), category: 'overwrite' },
+  // Discarding uncommitted work. `git reset --hard` and `git clean` were already
+  // registered; these reach the same place by a different subcommand and were
+  // not. What they destroy was never committed, so no reflog entry can restore
+  // it — this is strictly less recoverable than the two already covered.
+  // `git checkout <branch>` and `-b` stay out: they switch, they do not discard.
+  // Flags may follow the ref (`git checkout main -f` discards like `-f main`),
+  // and any argument beginning with `.` is a pathspec, not a ref — a ref
+  // component cannot start with a dot (git-check-ref-format) — so
+  // `git checkout ./subdir` and `git checkout .github/workflows` overwrite
+  // uncommitted edits under those paths.
+  { re: new RegExp(GIT_CMD + 'checkout\\s+(\\S+\\s+)*(-\\w*f\\b|--force\\b|--\\s|\\.\\S*(\\s|$))', 'i'), category: 'overwrite' },
+  { test: cmd => splitSegments(cmd).some(s => GIT_RESTORE_RE.test(s) && !gitRestoreIsUnstageOnly(s)),
+    category: 'overwrite' },
+  // `git switch -f|--force|--discard-changes` throws away local modifications on
+  // the way to the other branch — the same uncommitted-work destruction as
+  // `checkout -f`, reached through the subcommand that replaced it. A plain
+  // `git switch <branch>` refuses to lose changes and stays defer.
+  { re: new RegExp(GIT_CMD + 'switch\\s+(\\S+\\s+)*(-\\w*f\\b|--force\\b|--discard-changes\\b)', 'i'),
+    category: 'overwrite' },
+  { re: new RegExp(GIT_CMD + 'stash\\s+(clear|drop)\\b', 'i'),          category: 'deletion' },
+  { re: new RegExp(GIT_CMD + '(filter-branch|filter-repo)\\b', 'i'),    category: 'overwrite' },
+  // Destroying the recovery net itself. After these, the reflog answer to
+  // "just restore it from the reflog" is gone too.
+  { re: new RegExp(GIT_CMD + 'reflog\\s+expire\\b', 'i'),               category: 'deletion' },
+  { re: new RegExp(GIT_CMD + 'gc\\b[^\\n]*--prune\\b', 'i'),            category: 'deletion' },
+  // /i, unlike `branch -D` above: tag deletion is lowercase `-d` — there is no
+  // capital/lowercase severity distinction to preserve, so command-name casing
+  // (`GIT tag -d`, which Windows runs) must not change the judgment.
+  { re: new RegExp(GIT_CMD + 'tag\\s+(\\S+\\s+)*(-\\w*d\\b|--delete\\b)', 'i'), category: 'deletion' },
+  { re: new RegExp(GIT_CMD + 'update-ref\\s+(\\S+\\s+)*(-d\\b|--delete\\b)', 'i'), category: 'deletion' },
+  { re: new RegExp(GIT_CMD + 'worktree\\s+remove\\b', 'i'),             category: 'deletion' },
+  { re: new RegExp(GIT_CMD + 'submodule\\s+deinit\\b', 'i'),            category: 'deletion' },
   { re: new RegExp(GIT + '(commit|push)\\b[^\\n]*--no-verify', 'i'),    category: 'gate bypass' },
   // Only -D. Lowercase -d refuses to delete unmerged branches, so it is close to
   // reversible. Case matters here — no /i flag.
   { re: new RegExp(GIT + 'branch\\s+(\\S+\\s+)*-\\w*D'),                category: 'deletion' },
   { re: new RegExp(GIT + 'branch\\b[^\\n]*(--delete\\s+--force|--force\\s+--delete)', 'i'), category: 'deletion' },
-  { re: /\bgh\s+(repo|release|gist)\s+delete\b/i,        category: 'deletion' },
+  { re: /\bgh\s+(repo|release|gist|secret|variable)\s+delete\b/i,        category: 'deletion' },
   { re: /\bgh\s+api\b[^\n]*(-X|--method)[\s=]+DELETE\b/i, category: 'external send' },
+  // Any write method through `gh api` is a business-system write with no undo
+  // on the other side; only DELETE was registered.
+  { re: /\bgh\s+api\b[^\n]*(-X|--method)[\s=]+(POST|PUT|PATCH)\b/i, category: 'external send' },
+  // gh api switches to POST the moment a field flag appears — no -X required.
+  // `gh api …/issues -f title=x` writes; only an explicit GET keeps field
+  // flags read-only (they become query parameters).
+  { test: cmd => /\bgh\s+api\b/i.test(cmd) && /(\s-[fF]\b|\s--(raw-)?field\b)/.test(cmd)
+      && !/(-X|--method)[\s=]+GET\b/i.test(cmd),
+    category: 'external send' },
+  { re: /\bgh\s+(release|secret|variable)\s+(create|set)\b/i, category: 'deployment' },
+  { re: /\bgh\s+pr\s+(merge|close)\b/i,                  category: 'external send' },
+  // Destructive SQL, two tiers. The classic verb+keyword forms are unambiguous
+  // enough to match anywhere. The bare-object forms (`DROP DATABASE prod`,
+  // `TRUNCATE users`) collide with English prose — "drop database support",
+  // "truncate long lines" are ordinary commit messages — so they count only
+  // when a DB client appears in the same command. A gate that cries wolf on
+  // commit messages trains the user to approve without reading.
   { re: /\b(drop\s+table|delete\s+from|truncate\s+table)\b/i, category: 'business-system write' },
+  { test: cmd => /\b(psql|mysql|mariadb|sqlite3?|mongosh?|clickhouse-client|duckdb)\b/i.test(cmd)
+      && /\b(drop\s+(database|schema|table|index|view)|delete\s+from|truncate\s+(table\s+)?\w)/i.test(cmd),
+    category: 'business-system write' },
+  // Same prose collision as bare-object SQL: "add FLUSHALL guard" is a commit
+  // message. Unquoted occurrences ask anywhere; quoted ones only next to a
+  // Redis client (`echo "FLUSHALL" | redis-cli` is a real flush).
+  { test: cmd => /(^|[\s;&|])(FLUSHALL|FLUSHDB)\b/i.test(stripQuotedSpans(cmd))
+      || (/\bFLUSH(ALL|DB)\b/i.test(cmd) && /\b(redis-cli|valkey-cli)\b/i.test(cmd)),
+    category: 'business-system write' },
+  { re: /\.(dropDatabase|dropIndexes)\s*\(|\.drop\s*\(\s*\)|deleteMany\s*\(\s*\{\s*\}\s*\)/,
+    category: 'business-system write' },
   { re: /\bdd\s+if=/i,                                   category: 'overwrite' },
   // Upload forms are sends like POST bodies are: -F/--form (multipart),
   // -T/--upload-file (PUT), --json (implicit POST), --data-* variants.
@@ -351,15 +486,53 @@ const BASH_PATTERNS = [
   { re: /\b(scp|rsync)\b[^\n]*\s\S+@\S+:/i,              category: 'external send' },
   { re: /\baws\s+s3\s+(rm|rb)\b/i,                       category: 'deletion' },
   { re: /\baws\s+s3\s+sync\b[^\n]*--delete\b/i,          category: 'deletion' },
+  // Cloud CLIs beyond s3: the verb is the last word of the subcommand
+  // (`delete-object`, `terminate-instances`, `delete-db-instance`) or a bare
+  // `delete` at the end of a gcloud/az command path. Listing and reading verbs
+  // do not match. For gcloud/az the words between the CLI name and `delete`
+  // must all be bare words (no leading `-`): otherwise `delete` in VALUE
+  // position — `az group show --name delete`, `gcloud … list --filter delete` —
+  // reads as the verb. The cost is missing `az --output json group delete`
+  // (flag before the verb), which errs toward defer, not toward a false ask.
+  // Global flags before the service (`aws --profile prod rds delete-…`) are the
+  // standard multi-account spelling. The value-taking globals are enumerated by
+  // name — a generic "flag plus maybe-value" guess cannot tell `--no-paginate
+  // rds` (flag, then service) from `--profile prod` (flag and value). Unknown
+  // globals err toward defer, the same trade the gcloud/az pattern documents.
+  { re: /\baws\s+((--profile|--region|--endpoint-url|--output|--color|--cli-connect-timeout|--cli-read-timeout|--query)([=\s]+\S+)?\s+|--no-[\w-]+\s+|--debug\s+)*[a-z][\w-]*\s+(delete|terminate|destroy|remove)[\w-]*\b/i, category: 'deletion' },
+  { re: /\b(gcloud|az)\s+(?:[A-Za-z][\w-]*\s+)+delete\b/i, category: 'deletion' },
+  { re: /\bhelm\s+(uninstall|delete)\b/i,                category: 'deployment' },
+  { re: /\bdocker\s+(system|volume|image|container|network|builder)\s+prune\b/i, category: 'deletion' },
   { re: /\b(npm|yarn|pnpm)\s+publish\b/i,                category: 'deployment' },
+  // Taking a published version back is not a rollback: registries keep the name
+  // reserved, downstream lockfiles break immediately, and republishing the same
+  // version is refused.
+  { re: /\b(npm|yarn|pnpm)\s+(unpublish|deprecate)\b/i,  category: 'deployment' },
+  { re: /\bcargo\s+(publish|yank)\b/i,                   category: 'deployment' },
+  { re: /\bgem\s+push\b/i,                               category: 'deployment' },
+  { re: /\b(twine\s+upload|poetry\s+publish|flit\s+publish)\b/i, category: 'deployment' },
+  { re: /\bdotnet\s+nuget\s+push\b/i,                    category: 'deployment' },
+  { re: /\bmvn\b[^\n]*\sdeploy\b/i,                      category: 'deployment' },
   { re: /\b(docker\s+push|kubectl\s+(apply|delete)|terraform\s+(apply|destroy))\b/i, category: 'deployment' },
+  // Whole-volume destruction. `dd if=` was registered; the commands that exist
+  // for exactly this purpose were not.
+  { re: /(^|[\s;&|])(\S*[\\/])?mkfs(\.\w+)?\b/i,         category: 'overwrite' },
+  { re: /(^|[\s;&|])(\S*[\\/])?(diskpart|fdisk|parted)\b/i, category: 'overwrite' },
+  { re: /\b(Format-Volume|Initialize-Disk|Clear-Disk|Remove-Partition)\b/i, category: 'overwrite' },
+  // Windows `rd /s /q <dir>` is `rm -rf` under another name. `rmdir` was
+  // registered; its two-letter alias was not.
+  { re: /(^|[\s;&|])rd\s+\/[a-z]/i,                      category: 'deletion' },
   // One layer of shell wrapping or encoding neutralizes every pattern above
   // (L12 encoding-obfuscation). The wrapped content cannot be judged, so the
   // wrapping itself is treated as "cannot judge → ask".
   // Short options cluster: `bash -lc "…"`, `sh -ec "…"`, `zsh -ic "…"` all run
   // the string exactly like `-c` does, and long forms may precede it
   // (`bash --login -c`). Requiring a standalone `-c` matched none of them.
-  { re: /\b(bash|sh|zsh|dash|ksh)(\.exe)?\b(\s+(--?[\w-]+(=\S*)?|[^\s-]\S*))*\s+-[a-zA-Z]*c\b/i, category: 'gate bypass' },
+  // The shell name must be in command position. A bare `\b` also matches the
+  // tail of a FILENAME — `./deploy.sh -c config.yml` was read as `sh -c` and
+  // asked, while `bash deploy.sh` (the same script, actually run) deferred. An
+  // optional path prefix keeps `/bin/sh -c` and `C:\tools\bash.exe -c` matching.
+  { re: /(^|[\s;&|])(\S*[\\/])?(bash|sh|zsh|dash|ksh)(\.exe)?\b(\s+(--?[\w-]+(=\S*)?|[^\s-]\S*))*\s+-[a-zA-Z]*c\b/i, category: 'gate bypass' },
   // Interpreter one-liners are shell wrapping with a different binary:
   // `python -c "shutil.rmtree(…)"` deletes like rm and `node -e` can append to
   // any file — including this gate's own ledger. Judging them differently from

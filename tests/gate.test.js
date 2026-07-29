@@ -261,6 +261,204 @@ t('a quoted benign command word is untouched', () =>
 t('an assignment prefix does not shift the command position', () =>
   assert.strictEqual(decide(bash('FOO="a b" ls')).decision, 'defer'));
 
+/* The three shapes below are the same H-3 root cause reached by routes the
+ * command-word normalizer did not walk. Each was reproduced twice before being
+ * fixed: the gate returned `defer`, and the shell was confirmed to execute the
+ * command word for real (verified with `echo` substituted for `rm`). */
+console.log('\n[H-3 follow-up — a redirection or $-quote must not hide the command word]');
+t('a redirection before the command word', () =>
+  assert.strictEqual(decide(bash('>/dev/null "rm" -rf /tmp/x')).decision, 'ask'));
+t('an fd redirection before the command word', () =>
+  assert.strictEqual(decide(bash('2>/dev/null "rm" -rf /tmp/x')).decision, 'ask'));
+t('an input redirection before the command word', () =>
+  assert.strictEqual(decide(bash('<in.txt "rm" -rf /tmp/x')).decision, 'ask'));
+t('a detached redirection target is consumed', () =>
+  assert.strictEqual(decide(bash('> out.txt "rm" -rf /tmp/x')).decision, 'ask'));
+t('an appending redirection before the command word', () =>
+  assert.strictEqual(decide(bash('>>log "rm" -rf /tmp/x')).decision, 'ask'));
+t('a redirection between a wrapper and its command', () =>
+  assert.strictEqual(decide(bash('sudo >/dev/null "rm" -rf /tmp/x')).decision, 'ask'));
+t('a redirection before a quoted git subcommand', () =>
+  assert.strictEqual(decide(bash('>/dev/null git "push" origin main')).decision, 'ask'));
+t("ANSI-C quoting ($'rm')", () =>
+  assert.strictEqual(decide(bash("$'rm' -rf /tmp/x")).decision, 'ask'));
+t('locale quoting ($"rm")', () =>
+  assert.strictEqual(decide(bash('$"rm" -rf /tmp/x')).decision, 'ask'));
+t("ANSI-C quoting after a wrapper", () =>
+  assert.strictEqual(decide(bash("sudo $'rm' -rf /tmp/x")).decision, 'ask'));
+t('a redirection in an ordinary command still defers', () =>
+  assert.strictEqual(decide(bash('node app.js > out.log 2>&1')).decision, 'defer'));
+
+/* 0.4.4 — routes the post-release adversarial review proved open. The fd-dup
+ * shapes were reproduced before fixing: the gate deferred while bash executed
+ * the quoted command word (verified with `echo` substituted for `rm`) — the
+ * segment splitter treated the `&` of `2>&1` as a command separator, so the
+ * segment's command word became `1` and the walker never saw the redirection. */
+console.log('\n[0.4.4 review — fd-duplication routes, flag order, prose collisions]');
+t('2>&1 before a quoted command word', () =>
+  assert.strictEqual(decide(bash('2>&1 "rm" -rf /tmp/x')).decision, 'ask'));
+t('1>&2 before a quoted command word', () =>
+  assert.strictEqual(decide(bash('1>&2 "rm" -rf /tmp/x')).decision, 'ask'));
+t('>&2 before a quoted command word', () =>
+  assert.strictEqual(decide(bash('>&2 "rm" -rf /tmp/x')).decision, 'ask'));
+t('&>> before a quoted command word', () =>
+  assert.strictEqual(decide(bash('&>>log "rm" -rf /tmp/x')).decision, 'ask'));
+t('ordinary trailing 2>&1 still defers', () =>
+  assert.strictEqual(decide(bash('ls 2>&1')).decision, 'defer'));
+t('a background & still separates commands', () =>
+  assert.strictEqual(decide(bash('sleep 1 & "rm" -rf /tmp/x')).decision, 'ask'));
+t('checkout with the force flag after the ref', () =>
+  assert.strictEqual(decide(bash('git checkout main -f')).decision, 'ask'));
+t('checkout --force after the ref', () =>
+  assert.strictEqual(decide(bash('git checkout main --force')).decision, 'ask'));
+t('checkout of a dot pathspec discards edits under it', () =>
+  assert.strictEqual(decide(bash('git checkout ./subdir')).decision, 'ask'));
+t('checkout .github/… is a pathspec — a ref cannot begin with a dot', () =>
+  assert.strictEqual(decide(bash('git checkout .github/workflows')).decision, 'ask'));
+t('checkout of a branch with a slash stays defer', () =>
+  assert.strictEqual(decide(bash('git checkout feature/topic')).decision, 'defer'));
+t('tag -d asks regardless of command casing', () =>
+  assert.strictEqual(decide(bash('GIT tag -d v1')).decision, 'ask'));
+t('truncate in quoted prose stays an argument', () =>
+  assert.strictEqual(decide(bash('echo "please truncate the file"')).decision, 'defer'));
+t('a quoted truncate COMMAND word still asks', () =>
+  assert.strictEqual(decide(bash('"truncate" -s 0 data.db')).decision, 'ask'));
+t('FLUSHALL in a commit message stays an argument', () =>
+  assert.strictEqual(decide(bash('git commit -m "add FLUSHALL guard"')).decision, 'defer'));
+t('quoted FLUSHALL piped into a redis client asks', () =>
+  assert.strictEqual(decide(bash('echo "FLUSHALL" | redis-cli')).decision, 'ask'));
+t('git push inside quoted prose stays an argument', () =>
+  assert.strictEqual(decide(bash('echo "git push"')).decision, 'defer'));
+t('a quoted option value still occupies its value slot', () =>
+  assert.strictEqual(decide(bash('git -C "/repo" "push" origin main')).decision, 'ask'));
+t('aws global flags before the service', () =>
+  assert.strictEqual(decide(bash('aws --profile prod rds delete-db-instance --db-instance-identifier x')).decision, 'ask'));
+t('aws global flags before a read verb still defer', () =>
+  assert.strictEqual(decide(bash('aws --profile prod s3 ls')).decision, 'defer'));
+t('gh api with a field flag is an implicit POST', () =>
+  assert.strictEqual(decide(bash('gh api /repos/o/r/issues -f title=x')).decision, 'ask'));
+t('gh api -f with an explicit GET stays a read', () =>
+  assert.strictEqual(decide(bash('gh api -X GET /search/code -f q=x')).decision, 'defer'));
+
+console.log('\n[registry gaps — irreversible in practice, previously unregistered]');
+t('git checkout -- . discards uncommitted work', () =>
+  assert.strictEqual(decide(bash('git checkout -- .')).decision, 'ask'));
+t('git checkout .', () => assert.strictEqual(decide(bash('git checkout .')).decision, 'ask'));
+t('git checkout -f', () => assert.strictEqual(decide(bash('git checkout -f main')).decision, 'ask'));
+t('git restore .', () => assert.strictEqual(decide(bash('git restore .')).decision, 'ask'));
+t('git restore --worktree', () =>
+  assert.strictEqual(decide(bash('git restore --worktree .')).decision, 'ask'));
+t('git stash clear', () => assert.strictEqual(decide(bash('git stash clear')).decision, 'ask'));
+t('git reflog expire', () =>
+  assert.strictEqual(decide(bash('git reflog expire --expire=now --all')).decision, 'ask'));
+t('git gc --prune=now', () => assert.strictEqual(decide(bash('git gc --prune=now')).decision, 'ask'));
+t('git filter-branch', () =>
+  assert.strictEqual(decide(bash('git filter-branch --force --index-filter x HEAD')).decision, 'ask'));
+t('git tag -d', () => assert.strictEqual(decide(bash('git tag -d v1.0.0')).decision, 'ask'));
+t('git update-ref -d', () =>
+  assert.strictEqual(decide(bash('git update-ref -d refs/heads/main')).decision, 'ask'));
+t('git worktree remove', () =>
+  assert.strictEqual(decide(bash('git worktree remove --force wt')).decision, 'ask'));
+t('DROP DATABASE', () =>
+  assert.strictEqual(decide(bash('psql -c "DROP DATABASE prod"')).decision, 'ask'));
+t('DROP SCHEMA', () =>
+  assert.strictEqual(decide(bash('mysql --execute="DROP SCHEMA app"')).decision, 'ask'));
+t('redis FLUSHALL', () => assert.strictEqual(decide(bash('redis-cli FLUSHALL')).decision, 'ask'));
+t('mongo dropDatabase()', () =>
+  assert.strictEqual(decide(bash('mongosh --eval "db.dropDatabase()"')).decision, 'ask'));
+t('npm unpublish', () =>
+  assert.strictEqual(decide(bash('npm unpublish my-pkg --force')).decision, 'ask'));
+t('cargo publish', () => assert.strictEqual(decide(bash('cargo publish')).decision, 'ask'));
+t('twine upload', () => assert.strictEqual(decide(bash('twine upload dist/*')).decision, 'ask'));
+t('gh api POST', () =>
+  assert.strictEqual(decide(bash('gh api -X POST /repos/o/r/issues')).decision, 'ask'));
+t('gh pr merge', () => assert.strictEqual(decide(bash('gh pr merge 4 --merge')).decision, 'ask'));
+t('gh release create', () =>
+  assert.strictEqual(decide(bash('gh release create v1 --notes x')).decision, 'ask'));
+t('aws ec2 terminate-instances', () =>
+  assert.strictEqual(decide(bash('aws ec2 terminate-instances --instance-ids i-1')).decision, 'ask'));
+t('aws s3api delete-object', () =>
+  assert.strictEqual(decide(bash('aws s3api delete-object --bucket b --key k')).decision, 'ask'));
+t('gcloud delete', () =>
+  assert.strictEqual(decide(bash('gcloud compute instances delete vm-1')).decision, 'ask'));
+t('az group delete', () =>
+  assert.strictEqual(decide(bash('az group delete --name rg')).decision, 'ask'));
+t('helm uninstall', () => assert.strictEqual(decide(bash('helm uninstall release')).decision, 'ask'));
+t('docker system prune', () =>
+  assert.strictEqual(decide(bash('docker system prune -af')).decision, 'ask'));
+t('mkfs', () => assert.strictEqual(decide(bash('mkfs.ext4 /dev/sda1')).decision, 'ask'));
+t('Windows rd /s /q', () =>
+  assert.strictEqual(decide(bash('rd /s /q C:\\temp\\x')).decision, 'ask'));
+
+console.log('\n[registry gaps — the reading and switching forms must NOT ask]');
+t('git checkout <branch> switches, it does not discard', () =>
+  assert.strictEqual(decide(bash('git checkout main')).decision, 'defer'));
+t('git checkout -b creates', () =>
+  assert.strictEqual(decide(bash('git checkout -b feature/x')).decision, 'defer'));
+t('git restore --staged only unstages', () =>
+  assert.strictEqual(decide(bash('git restore --staged file.txt')).decision, 'defer'));
+t('git stash / git stash pop', () => {
+  assert.strictEqual(decide(bash('git stash')).decision, 'defer');
+  assert.strictEqual(decide(bash('git stash pop')).decision, 'defer');
+});
+t('git gc without --prune', () => assert.strictEqual(decide(bash('git gc')).decision, 'defer'));
+t('git tag -l', () => assert.strictEqual(decide(bash('git tag -l')).decision, 'defer'));
+t('git worktree list', () =>
+  assert.strictEqual(decide(bash('git worktree list')).decision, 'defer'));
+t('a dangerous git subcommand inside quoted text is argument text', () => {
+  assert.strictEqual(decide(bash('echo "git restore ."')).decision, 'defer');
+  assert.strictEqual(decide(bash('grep -rn "git stash clear" docs/')).decision, 'defer');
+});
+t('listing verbs on cloud CLIs', () => {
+  assert.strictEqual(decide(bash('gcloud compute instances list')).decision, 'defer');
+  assert.strictEqual(decide(bash('az group list')).decision, 'defer');
+  assert.strictEqual(decide(bash('helm list')).decision, 'defer');
+  assert.strictEqual(decide(bash('docker images')).decision, 'defer');
+});
+t('reading SQL', () => {
+  assert.strictEqual(decide(bash('psql -c "select 1"')).decision, 'defer');
+  assert.strictEqual(decide(bash('mysql -e "show tables"')).decision, 'defer');
+  assert.strictEqual(decide(bash('psql -c "create table t (id int)"')).decision, 'defer');
+});
+t('gh read calls', () => {
+  assert.strictEqual(decide(bash('gh api /repos/o/r')).decision, 'defer');
+  assert.strictEqual(decide(bash('gh api -X GET /repos/o/r')).decision, 'defer');
+  assert.strictEqual(decide(bash('gh pr list')).decision, 'defer');
+});
+t('SQL words in English prose are not SQL', () => {
+  // The bare-object forms only count next to a DB client — otherwise ordinary
+  // commit messages trip the gate and train the user to approve without reading.
+  assert.strictEqual(decide(bash('git commit -m "truncate long lines"')).decision, 'defer');
+  assert.strictEqual(decide(bash('git commit -m "drop database support"')).decision, 'defer');
+  assert.strictEqual(decide(bash('git commit -m "docs: drop index page"')).decision, 'defer');
+});
+t('the same words next to a DB client still ask', () => {
+  assert.strictEqual(decide(bash('psql -c "TRUNCATE users"')).decision, 'ask');
+  assert.strictEqual(decide(bash('psql -c "DROP DATABASE prod"')).decision, 'ask');
+  assert.strictEqual(decide(bash('mysql --execute="DROP SCHEMA app"')).decision, 'ask');
+});
+t('the classic keyword forms still ask anywhere', () => {
+  assert.strictEqual(decide(bash('run-query "drop table users"')).decision, 'ask');
+  assert.strictEqual(decide(bash('run-query "delete from users"')).decision, 'ask');
+});
+t('delete as a VALUE is not the delete verb (gcloud/az)', () => {
+  assert.strictEqual(decide(bash('az group show --name delete')).decision, 'defer');
+  assert.strictEqual(decide(bash('gcloud compute instances list --filter delete')).decision, 'defer');
+});
+t('git switch that discards local changes asks; plain switch does not', () => {
+  assert.strictEqual(decide(bash('git switch --discard-changes main')).decision, 'ask');
+  assert.strictEqual(decide(bash('git switch -f main')).decision, 'ask');
+  assert.strictEqual(decide(bash('git switch main')).decision, 'defer');
+  assert.strictEqual(decide(bash('git switch -c topic')).decision, 'defer');
+});
+t('a .sh script taking its own -c option is not `sh -c`', () =>
+  assert.strictEqual(decide(bash('./deploy.sh -c config.yml')).decision, 'defer'));
+t('but a real shell -c still asks, path-prefixed included', () => {
+  assert.strictEqual(decide(bash('sh -c "ls"')).decision, 'ask');
+  assert.strictEqual(decide(bash('/bin/sh -c "ls"')).decision, 'ask');
+  assert.strictEqual(decide(bash('bash -lc "x"')).decision, 'ask');
+});
+
 console.log('\n[fail-closed — cannot judge is not a pass]');
 t('broken JSON',       () => assert.strictEqual(decisionOf('{"tool_name":'), 'ask'));
 t('empty input',       () => assert.strictEqual(decisionOf(''), 'ask'));
@@ -394,6 +592,26 @@ t('reconcile without evidence is refused', () => {
   runHook(GATE, bash('rm -rf ./x'));
   const hash = ledger.readAll()[0].request_hash;
   const r = runReconcile([hash, '--outcome', 'ran']);
+  assert.notStrictEqual(r.code, 0, 'must refuse');
+  assert.strictEqual(ledger.openApprovals().length, 1, 'must stay open');
+});
+t('a refusal can be closed as denied, not as a lost outcome', () => {
+  // The host emits no closing record for a manual denial, so without this
+  // vocabulary a refused action stays `unknown` and reads as "go find out
+  // whether it ran".
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  runHook(GATE, bash('rm -rf ./x'));
+  const hash = ledger.readAll()[0].request_hash;
+  const r = runReconcile([hash, '--outcome', 'denied', '--evidence', 'I declined the prompt']);
+  assert.strictEqual(r.code, 0, r.out);
+  assert.strictEqual(ledger.openApprovals().length, 0);
+  assert.strictEqual(ledger.readAll().pop().outcome, 'denied');
+});
+t('an invented outcome is still refused', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  runHook(GATE, bash('rm -rf ./x'));
+  const hash = ledger.readAll()[0].request_hash;
+  const r = runReconcile([hash, '--outcome', 'probably-fine', '--evidence', 'x']);
   assert.notStrictEqual(r.code, 0, 'must refuse');
   assert.strictEqual(ledger.openApprovals().length, 1, 'must stay open');
 });

@@ -47,8 +47,11 @@ function buildContext() {
     'The state of these items is **unknown** — not failed; the outcome was never observed.',
     '**Do not retry automatically.** The action may in fact have run.',
     'First observe the real side effects to establish whether it ran, then report the result to the user.',
+    'Some of these may be approvals the user simply refused: a manual denial has',
+    'produced no closing record on any host observed so far, so a refusal looks',
+    'exactly like a lost outcome. Ask before assuming an action needs chasing down.',
     'Once observed, close it so it stops re-appearing:',
-    '  node <plugin>/scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "<observation>"',
+    '  node <plugin>/scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|denied|superseded --evidence "<observation>"',
     `Ledger: ~/.claude/mary/approvals.jsonl`,
   ].filter(Boolean).join('\n');
 }
