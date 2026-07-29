@@ -18,7 +18,7 @@ Rv.0 is the first public release of Mary as a Claude Code plugin: a workflow ski
 - `PostToolUse` and `PostToolUseFailure` hooks connect an approval request to the observed execution result.
 - A `PermissionDenied` hook closes an approval as `denied` when the host reports the denial.
 - A `SessionStart` hook reports approvals whose result was never recorded as `unknown`; they are never treated as failed or automatically retried.
-- An append-only approval ledger stores what the user was shown, a normalized request hash, and the observed result. Only gated calls are recorded, and tool response bodies are never stored — command output can contain secrets.
+- An append-only approval ledger stores a secret-masked reason, compact request metadata, the host `tool_use_id`, a raw-input request hash for integrity/legacy fallback, and the observed result. Write/Edit/Notebook bodies and tool response bodies are never stored.
 - A bundled read-only `mary-critic` agent gives the adversarial-review stage a fixed, tool-restricted reviewer profile.
 - A `mary-stats.js` auditor recomputes failure counters and rule-promotion candidates deterministically, instead of trusting the model's arithmetic.
 - Multiple active tasks use separate `_work-<slug>.md` files while sharing one `RULES.md` and one `FAILLOG.md`.
@@ -157,9 +157,9 @@ The Bash self-protection check is a heuristic. No string-level inspection reads 
 
 For recognized actions, the hook returns Claude Code's native `ask` decision. It does not silently approve the action and does not reuse a previous approval.
 
-For unrecognized commands and ordinary file writes, the hook returns `defer`, which hands the decision back to Claude Code's normal permission system. `defer` does **not** mean the hook verified the action as safe.
+For unrecognized commands and ordinary file writes, the hook emits **no decision**: it exits successfully with empty output, leaving Claude Code's normal permission system authoritative. No decision does **not** mean the hook verified the action as safe.
 
-The gate is fail-closed for malformed hook input: empty input, invalid JSON, a missing tool name, or an unreadable Bash command produces `ask` rather than approval. This is not a universal deny-by-default policy. **The one surface the gate never sees**: tools outside the registered matcher (MCP tools, the Agent tool, any future host tool) are never routed to the hook at all, so no fail-closed path exists for them — this is stated here rather than left to be discovered. Semantic risks that do not match the implemented patterns defer to the host's normal permission flow.
+The gate is fail-closed for malformed hook input: empty input, invalid JSON, a missing tool name, or an unreadable Bash command produces `ask` rather than approval. This is not a universal deny-by-default policy. **The one surface the gate never sees**: tools outside the registered matcher (MCP tools, the Agent tool, any future host tool) are never routed to the hook at all, so no fail-closed path exists for them. Semantic risks that do not match the implemented patterns produce no hook decision and remain subject to the host's normal permission flow.
 
 When the gate asks, it may append two best-effort context warnings to the text the user approves:
 
@@ -172,12 +172,12 @@ Both warnings are visibility only: they never change the decision, never block, 
 
 When the gate asks, Mary appends an `asked` event to `~/.claude/mary/approvals.jsonl`. The record keeps:
 
-- the exact explanation shown to the user;
-- the tool request;
-- a normalized request hash used for machine matching; and
-- the later result, when one is observed: `succeeded`, `failed`, `denied`, or `reconciled` — the last written by `scripts/mary-reconcile.js` when a human observed the real side effects afterwards, with the observation attached as evidence.
+- the secret-masked explanation shown to the user;
+- a compact request record: paths and non-content metadata, while Write/Edit/Notebook bodies are replaced by byte counts and SHA-256 digests;
+- the host `tool_use_id`, with a normalized request hash retained for integrity and legacy fallback; and
+- the later result, when one is observed: `succeeded`, `failed`, `denied`, or `reconciled` — the last written by `scripts/mary-reconcile.js` when a human observed the real side effects afterwards and attached evidence.
 
-The stored copies of the explanation and the request are **secret-masked** (recognized token shapes such as `Authorization:` headers, `key=value` assignments, and AWS/GitHub/Slack/JWT tokens are replaced before writing; masked entries carry `redacted: true`). The ledger is plaintext forever, and a gated `curl -H "Authorization: Bearer …"` would otherwise retain the token long after the command ran. The hash is computed over the raw input, so masking never breaks approval→outcome matching — and the dialog the human sees is the unmasked original. Masking is pattern-based and best-effort; unrecognized secret formats still land in plaintext (see the threat model).
+The stored explanation and non-content strings are **secret-masked**. Content-bearing fields such as Write content and Edit old/new strings are not stored at all; only size and digest remain. The hash is computed over the raw input, so compaction and masking do not break approval→outcome matching. The dialog the human sees remains the original text.
 
 The result recorder only writes when a matching open `asked` entry exists. Tool calls that never passed the gate are not logged, so the ledger stays an approval record rather than a growing plaintext log of every command output.
 
@@ -202,7 +202,7 @@ Invoking `mary-reconcile` through Bash is **itself a gated action**: the approva
 { "url": "https://ntfy.sh/your-private-topic", "headers": { "Title": "mary" } }
 ```
 
-The ping deliberately contains **no command text, no paths, and no project identifiers** — only "approval waiting", the tool name, and a timestamp. Command text can contain secrets, folder names can identify clients, and a push service is an external party. The URL must be `https`; plaintext `http` needs an explicit `"allowHttp": true` (e.g. an ntfy instance on your own LAN).
+The ping deliberately contains **no command text, no paths, and no project identifiers** — only "approval waiting", the tool name, and a timestamp. URLs may not contain credentials, query strings, or fragments, and only the bounded printable `Title`, `Priority`, and `Tags` headers are accepted. The URL must be `https`; plaintext `http` needs an explicit `"allowHttp": true` for a trusted LAN/self-hosted endpoint. Configuration is cached after its first valid load, and each request has a five-second wall-clock deadline.
 
 The *answer* still happens at the terminal. The host's permission prompt has no remote answer channel, and replacing the physically present human's button with a remote channel would swap the gate's final defense line for that channel's authentication strength. If a channel with device-bound authentication and ledger binding exists someday, revisit this deliberately — not as a side effect of wanting convenience.
 
@@ -300,7 +300,7 @@ The plugin components must stay together.
 | `agents/mary-critic.md` | Read-only adversarial reviewer used by stage 4-2 |
 | `scripts/mary-stats.js` | Read-only auditor that recomputes counters and promotion candidates |
 | `hooks/hooks.json` | Registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `Notification`, and `SessionStart` |
-| `scripts/hooks/mary-irreversible-gate.js` | Recognizes gated actions and returns `ask` or `defer`; adds cross-session and trifecta context warnings |
+| `scripts/hooks/mary-irreversible-gate.js` | Recognizes gated actions, returns `ask` for them, and emits no decision for non-matches; adds cross-session and trifecta context warnings |
 | `scripts/hooks/mary-outcome-recorder.js` | Records the observed result for a matching approval |
 | `scripts/hooks/mary-session-report.js` | Reports unresolved approvals as `unknown` at session start |
 | `scripts/hooks/mary-trifecta-sentinel.js` | Records per-session ingestion of untrusted external content (never blocks, never decides) |

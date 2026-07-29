@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Non-matching gate calls now emit no hook decision instead of `defer`; malformed or unjudgeable inputs still ask.
+- Approval outcomes bind by `tool_use_id`, with normalized cwd/session/hash used only for strict legacy fallback.
+- Ledger read, parse, and append failures are visible instead of being reported as an empty or fully audited ledger.
+- Session-start context no longer includes stored command or file content; Write/Edit/Notebook bodies are retained only as size and SHA-256 metadata.
+- Outcome events are explicitly whitelisted and reconciliation arguments reject missing, flag-shaped, unknown, or extra values.
+- Notification URLs and headers are constrained to remove persistent data channels, valid configuration is cached, and POSTs have a wall-clock deadline.
+- Added regression coverage for the hook no-decision contract, event identity, corrupt ledgers, content minimization, notifier validation, and reconcile parsing.
+
 ## 0.4.4 — 2026-07-29
 
 Pre-merge hardening. Before 0.4.3 reached `main`, an independent adversarial

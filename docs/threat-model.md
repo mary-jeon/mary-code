@@ -14,21 +14,21 @@ exists so the second failure cannot happen.
   MultiEdit | NotebookEdit` calls. Registered irreversible shapes (deletion,
   overwrite, external send, deployment, gate bypass, ledger closure,
   enforcement-config change) return `ask` — a human sees a dialog before the call
-  runs. Everything else returns `defer` (the host's normal permission flow), never
-  `allow`.
-- **Approval→outcome binding.** Every `ask` appends an `asked` record with a
-  canonical request hash. `PostToolUse` / `PostToolUseFailure` /
-  `PermissionDenied` append the closing record with the same hash. An approval
-  with no closing record is **unknown** — reported at every session start until a
-  human closes it with observed evidence (`mary-reconcile`, evidence mandatory).
+  runs. Everything else emits no hook decision (exit 0 with empty stdout), never
+  `allow`; the host's normal permission flow remains authoritative.
+- **Approval→outcome binding.** Every `ask` appends an `asked` record with the
+  host `tool_use_id`, normalized cwd, and a canonical request hash. Closing events
+  bind by `tool_use_id`; strict session+cwd+hash matching exists only for legacy
+  events without an id. An approval with no closing record is **unknown** — reported
+  at every session start until a human closes it with observed evidence.
 - **Fail-closed judgment.** Unreadable stdin, broken JSON, a missing tool name, an
   empty command, an internal exception — every failure to judge ends in `ask`,
   never in a pass. (Tests: `[fail-closed — cannot judge is not a pass]`.)
 
 ## 2. What is deliberately NOT enforced
 
-- **No automatic allow.** No pattern ever whitelists a call. A non-match is a
-  defer, not an approval.
+- **No automatic allow.** No pattern ever whitelists a call. A non-match emits no
+  hook decision; it is not an approval.
 - **No hard block.** The gate never exits 2. Removing the human's ability to say
   "yes, do it" would just move the bypass to "disable the plugin".
 - **No approval reuse.** No session cache, no timeout window, no "the same command
@@ -39,9 +39,9 @@ exists so the second failure cannot happen.
 Tools outside the hook matcher (`Bash | Write | Edit | MultiEdit | NotebookEdit`,
 plus `WebFetch | WebSearch` for the sentinel) **never reach the gate at all** —
 there is no fail-closed path for a call the host never routes to us. This includes
-MCP-provided tools, the Agent tool, and any future tool the host adds. That is the
-single place where "no decision" and "defer" are indistinguishable by
-construction. Mitigation: the matcher list is short, explicit, and lives in
+MCP-provided tools, the Agent tool, and any future tool the host adds. Calls that
+are routed but do not match emit no decision; calls outside the matcher never reach
+Mary at all. Mitigation: the matcher list is short, explicit, and lives in
 `hooks/hooks.json` — which is itself a SELF_PROTECTED file.
 
 ## 4. Attacker classes
@@ -183,11 +183,11 @@ they are auditor defects, not gate bypasses.
   the plugin root. A payload with no `cwd` (not observed from Claude Code, which
   always sends it) would skip that branch; absolute mentions and the generic
   entries (settings, managed-settings, ledger) are protected regardless.
-- **Secret masking is pattern-based.** The stored ledger copy masks known token
-  shapes (`Authorization:` headers, `key=value` assignments, AWS/GitHub/Slack/JWT
-  shapes). An unrecognized secret format is stored in plaintext. Masked entries
-  carry `redacted: true`; the hash is over the raw input, so masking never breaks
-  approval→outcome matching.
+- **Stored request minimization.** Non-content strings are masked for known secret
+  shapes. Write/Edit/Notebook content fields are never retained; byte counts and
+  SHA-256 digests replace them. Unknown secrets may still appear in command strings
+  or other non-content metadata. The request hash is over raw input, so masking and
+  compaction do not break approval→outcome matching.
 
 ### The ledger under each install tier (C4)
 
@@ -206,9 +206,9 @@ it, so it stays user-writable by necessity. Consequences, stated plainly:
 
 Can prove (assuming hooks were installed and running):
 
-- that a matching gate dialog was **presented** (`asked` + the exact sentence shown),
+- that a matching gate dialog was **presented** (`asked` plus a masked copy of its reason),
 - that the host later reported the call **succeeded / failed / was denied**
-  (closing record, hash-and-session matched),
+  (closing record bound by `tool_use_id`, with strict legacy fallback),
 - that an approval **never got an outcome** (`unknown` — surfaced every session).
 
 Cannot prove:
@@ -230,8 +230,8 @@ Cannot prove:
 
 ## 7. What fail-closed means in this project
 
-Every input the gate can *identify* ends in `ask` or `defer` — including every
-error path. There is no code path that maps "could not judge" to a pass. The only
-silent non-decision is §3: a call the host never routes to the gate, which no
-hook-side code can convert into a judgment. If you find a second one, it is a bug
-of the highest severity this project recognizes — report it.
+Malformed or unjudgeable input routed to the gate ends in `ask`; no parser or
+internal-error path silently approves it. A routed call that is successfully judged
+to have no registered risk emits no hook decision, so the host's normal permission
+flow remains authoritative. A tool outside the matcher never invokes Mary at all.
+These are three distinct states and must remain distinct in code, tests, and docs.
