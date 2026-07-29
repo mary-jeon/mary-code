@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.0 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.3 · Experimental · Claude Code**
 >
 > [English](./README.md) (정본) · **한국어**
 >
@@ -156,20 +156,49 @@ Mary의 보호층은 둘이고, 서로 다릅니다:
 Rv.0 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며 다음을 인식하면 승인을 요청합니다:
 
 - 파일 삭제 — 비재귀·경로 접두 포함 (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`)
-- `git push`(`-C` 같은 전역 옵션 허용, `--dry-run`은 그것이 등장한 명령 세그먼트만 면제),
-  파괴적 Git reset/clean, 브랜치 강제 삭제, `--no-verify` 우회
-- `gh`를 통한 GitHub 저장소·릴리스·gist 삭제, DELETE 메서드의 `gh api` 호출
-- 파괴적 SQL 패턴
-- 디스크 덮어쓰기·절단 명령
+- `git push`(`-C` 같은 전역 옵션과 `-c core.pager="less -n"` 같은 따옴표 값 허용).
+  `--dry-run` 면제는 **문자열 매칭이 아니라 파싱**으로 판정합니다 — 그 `push`의 실제 인자로,
+  그 명령 세그먼트 안에 있을 때만 인정되며, 주석 처리된 플래그·`--push-option`의 값인 `-n`·
+  설정값에서 빌려온 `-n`은 면제를 사지 못합니다. 파괴적 Git reset/clean, 브랜치 강제 삭제,
+  `--no-verify` 우회도 포함
+- 커밋되지 않은 작업의 폐기와 복구 수단 자체의 파괴: `git checkout -- .` / `git checkout .` / `-f`,
+  `git restore`(`--worktree` 없는 `--staged`는 인덱스만 되돌리므로 제외),
+  `git switch -f`/`--discard-changes`, `git stash clear`/`drop`,
+  `git reflog expire`, `git gc --prune`, `git filter-branch`/`filter-repo`, `git tag -d`,
+  `git update-ref -d`, `git worktree remove`, `git submodule deinit`
+- `gh`를 통한 GitHub 조작: 저장소·릴리스·gist·시크릿 삭제, DELETE·POST·PUT·PATCH 메서드의
+  `gh api`, `gh pr merge`/`close`, `gh release create`, `gh secret set`
+- 파괴적 SQL과 비-SQL 저장소의 동등 명령 (`drop table`/`database`/`schema`/`index`/`view`,
+  `delete from`, `truncate`, `FLUSHALL`/`FLUSHDB`, mongo `dropDatabase()`·`drop()`·`deleteMany({})`) —
+  목적어만 있는 형태는 DB 클라이언트가 같은 명령에 있을 때만 인정합니다. "drop database support"
+  같은 커밋 메시지가 게이트를 건드리지 않게요
+- 디스크 덮어쓰기·절단 명령, 볼륨 전체 파괴 (`mkfs`, `diskpart`/`fdisk`/`parted`,
+  `Format-Volume`, `Clear-Disk`), Windows `rd /s /q`
 - 데이터를 전송하는 HTTP 명령 — 업로드 형태 포함 (`-F`/`--form`, `-T`/`--upload-file`, `--json`, `--data-*`)
-- 원격 동기화·클라우드 삭제 (`rsync --delete`, `user@host:` 대상의 `scp`/`rsync`, `aws s3 rm`/`rb`/`sync --delete`)
-- 패키지 배포와 주요 배포 명령
+- 원격 동기화·클라우드 삭제 (`rsync --delete`, `user@host:` 대상의 `scp`/`rsync`,
+  `aws s3 rm`/`rb`/`sync --delete`, `aws <서비스> delete-*`/`terminate-*`, `gcloud … delete`,
+  `az … delete`, `helm uninstall`, `docker … prune`)
+- 패키지 배포와 **배포 철회** (`npm publish`/`unpublish`/`deprecate`, `cargo publish`/`yank`,
+  `gem push`, `twine upload`, `poetry publish`, `dotnet nuget push`, `mvn deploy`) 및 주요 배포 명령.
+  배포된 버전을 내리는 것은 롤백이 아닙니다 — 이름은 예약된 채 남고 하위 lockfile은 즉시 깨집니다
 - 패턴 검사를 세탁할 수 있는 셸 래퍼·인코딩 호출 (`bash -c`, `python -c`/`node -e` 류 인터프리터
   원라이너, `powershell -EncodedCommand`, `ssh host <명령>`, 다운로드를 셸에 파이프, `eval`) —
-  감싼 내용을 판정할 수 없으므로 감싸는 행위 자체를 "판정 불가 → 승인 요청"으로 처리
-- Mary 자신의 설정·매니페스트·훅 등록·훅 스크립트·승인 원장(`approvals.jsonl`) 수정 — Write 계열은 경로로,
+  감싼 내용을 판정할 수 없으므로 감싸는 행위 자체를 "판정 불가 → 승인 요청"으로 처리.
+  **묶인 단문자 옵션도 포함**: `bash -lc`, `sh -ec`, `python3 -Ic`, `perl -we`는 `-c`와 똑같이
+  문자열을 실행합니다. `perl -E`·`php -R`는 대소문자를 구분하는 별도 항목인데, 대소문자를 접으면
+  node의 `-r`(파일을 실행하는 모듈 프리로드)이 코드로 읽혀 평범한 명령에 승인을 요구하기 때문입니다
+- Mary 자신의 설정·매니페스트·훅 등록·훅 스크립트·승인 원장(`approvals.jsonl`)·알림 설정
+  (`notify.json` — 모든 승인 핑이 POST될 URL과 헤더를 지정합니다) 수정 — Write 계열은 경로로,
   Bash는 보호 경로 언급 + 쓰기 흔적(리다이렉트, `sed -i`, `tee`, `cp`/`mv`, `ln`, PowerShell 쓰기 cmdlet) 결합으로.
   조용히 고칠 수 있는 원장은 증거이기를 멈춥니다
+
+위 패턴은 모두 단어 경계(`(^|[\s;&|])name`)에 앵커되므로, 셸 자신의 따옴표 제거가 그대로
+무력화합니다 — `"rm" -rf`, `'rm'`, `r\m`, `git "push"`, `$'rm'`은 실행되지만 매칭될 맨 단어가
+없습니다. 그래서 따옴표는 **명령어 자리(첫 단어)에서만** 제거하고, 래퍼 문법(`sudo -u root "rm"`,
+`env FOO=1 "rm"`, `timeout 5 "rm"`)과 리다이렉션(명령어 앞의 `>/dev/null "rm" -rf`, 래퍼와
+명령 사이의 `sudo >/dev/null "rm"`)을 따라가며, 정규화된 문자열을 원본과 **함께** 매칭합니다.
+인자의 따옴표는 손대지 않으며, 그것이 `echo "rm -rf /"`와 `git commit -m "rm -rf fix"`를
+`defer`로 유지하는 이유입니다.
 
 자기 보호는 **앵커링**됩니다: 플러그인 상대 경로(`scripts/`, `hooks/hooks.json`,
 `.claude-plugin/plugin.json`)는 플러그인의 실제 설치 루트 아래에서만 보호되며, 무관한
@@ -239,7 +268,7 @@ Bearer …"`가 아니면 명령이 끝난 뒤에도 토큰을 품고 남기 때
 
 ```
 node scripts/mary-reconcile.js --list
-node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "<관측한 것>"
+node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|denied|superseded --evidence "<관측한 것>"
 ```
 
 증거는 필수이고(관측 없는 종결은 원장이 막으려는 phantom-execution 그 자체입니다), 원장은
@@ -423,10 +452,14 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 - 훅은 정의된 도구·패턴 집합만 인식합니다. 모든 도구·명령·외부 전송·업무시스템 쓰기를 중재하지 않습니다.
 - Bash 자기 보호는 보호 경로 언급과 쓰기 흔적의 결합 휴리스틱입니다. 파서가 아니므로 충분히
   우회적인 셸 명령은 피해 갈 수 있습니다.
-- 수동 거부 시 호스트가 `PermissionDenied`를 내는지는 완전히 문서화돼 있지 않습니다.
-  **현재까지의 실측(macOS 빌드, 2026-07-26, 실사용 asked 9건 / denied 0건): 이벤트는 방출되지
+- 수동 거부 시 호스트가 `PermissionDenied`를 내는지는 완전히 문서화돼 있지 않습니다. 훅 레퍼런스는
+  이 이벤트를 "auto mode classifier가 도구 호출을 거부할 때" 발생한다고만 설명합니다.
+  **현재까지의 실측 — macOS 빌드 2026-07-26(asked 9건 / denied 0건), Windows 원장
+  2026-07-24~07-29(전체 999건 중 asked 171건 / denied 0건): 이벤트는 한 번도 방출되지
   않았고** 수동 거부는 `unknown`으로 남았습니다. 관측되지 않은 거부는 열린 채 남아 다음 세션
-  시작 때 `unknown`으로 보고됩니다 — 사람이 실제 결과를 관측한 뒤에는 `mary-reconcile.js`로 닫습니다.
+  시작 때 `unknown`으로 보고됩니다. 0.4.2부터는 `mary-reconcile.js --outcome denied`로 "잃어버린
+  결과"가 아니라 "거부"로 기록할 수 있고, 세션 시작 보고도 미결 중 일부는 쫓아가야 할 행동이
+  아니라 사용자가 거부한 건일 수 있다고 알립니다. 훅 스스로 둘을 구분하지는 못합니다.
 - 교차 세션 경고는 작업 디렉터리 문자열로 대조합니다. 같은 원격의 서로 다른 클론 두 개는
   게이트가 볼 수 없는 공유 외부 상태입니다.
 - trifecta 센티널은 세 다리 중 둘(비신뢰 입력, 외부 전송)만 관측합니다. 민감정보 접근은 도구
@@ -435,15 +468,22 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 
 ## 개발 상태
 
-**현재 버전: Rv.0 / plugin 0.4.0 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
+**현재 버전: Rv.0 / plugin 0.4.3 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
 
 동작 중: 6단계 절차, Standard/Guarded 등급, 검증→반례→수정→재검증, 사용자 언어 자동 일치,
 다중 `_work` 기록, 실패 적립과 사용자 승인 승격, 비가역 게이트(래퍼 세탁 패턴 포함),
 승인-결과-거부 결속, 게이트 통과 호출 전용 원장, 미결 승인 보고와 `reconciled` 종결,
 교차세션·trifecta 맥락 경고, 검증 영수증 검산, 승인 대기 웹훅 알림, 관리형 배포 스크립트,
 동봉 비평 에이전트와 검산기, 공개 위협 모델([`docs/threat-model.md`](docs/threat-model.md)),
-원장 시크릿 마스킹, 플러그인 루트 앵커링 자기 보호, 세그먼트 단위 `--dry-run` 면제,
-CI(GitHub Actions, Node 20/22 · Linux/Windows), 회귀 검사 154건.
+원장 시크릿 마스킹, 플러그인 루트 앵커링 자기 보호, 파싱 기반 `--dry-run` 면제,
+명령어 자리 따옴표·리다이렉션 정규화, CI(GitHub Actions, Node 20/22 · Linux/Windows, 매트릭스 전 레그 완주),
+검증 영수증 회차 간 연속성 검산(재검 비율·통과→실패 뒤집힘·공통 항목 0),
+4-2 반례 축 로테이션(명세 부합 · 상태와 구조 · 경계와 회귀 · 운용), 정체 감지(2회차 연속 완료 조건
+0건 종결 시 중단·보고), 회귀 검사 266건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
+`psql -c "select 1"`, `gh api -X GET`, `gcloud … list`)가 승인을 **요구하지 않아야** 한다는
+음성 테스트군 포함 — 그리고 명령 267건의 **판정 스냅샷**(`tests/decisions.test.js`): 고정된
+판정(`ask`+분류 또는 `defer`)이 어느 방향으로든 움직이면 CI가 실패하므로, 판정 완화는 의도적
+스냅샷 재생성과 그 diff 검토를 거쳐야만 배포됩니다.
 
 개발 중: **결정 재추적 엔진** — 명세 완료, 구현 진행 중.
 

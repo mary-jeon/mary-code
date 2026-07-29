@@ -135,9 +135,65 @@ function parseReceipts(text) {
       });
     }
     const failing = Array.isArray(obj.items) ? obj.items.filter(it => it && it.pass === false).length : 0;
-    receipts.push({ task: obj.task_id || null, items: Array.isArray(obj.items) ? obj.items.length : 0, errors, failing });
+    const checks = (Array.isArray(obj.items) ? obj.items : [])
+      .map(it => ({ key: checkKey(it && it.check), check: String((it && it.check) || ''), pass: it && it.pass }))
+      .filter(c => c.key);
+    receipts.push({ task: obj.task_id || null, items: Array.isArray(obj.items) ? obj.items.length : 0,
+      errors, failing, checks });
   }
   return receipts;
+}
+
+/** Identity of a check across rounds. Punctuation, spacing, and case drift
+ * between rounds, so only word characters count. The full string is kept —
+ * truncating would merge two long checks that share a prefix, and a false
+ * merge here becomes a false pass→fail warning. */
+function checkKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+}
+
+/* ── Receipt continuity across rounds (SKILL 4-4) ─────────────────────
+ * 4-4 says: if anything was fixed, run 4-1 again. 4-1 says: run everything
+ * stage 0 classified as verifiable. Together that means a later round re-runs
+ * the earlier checks — which is the only way "the fix broke something that
+ * used to pass" can ever be seen.
+ *
+ * Receipts are already machine-readable and already accumulate in the `_work`
+ * file, so whether that actually happened is computable rather than remembered.
+ * Measured on the author's own records when this was written: of 54 receipt
+ * items across 5 rounds (design task) only 5 were ever re-run, and of 132 items
+ * across 18 rounds (BOM task) only 14 — about 90 % of checks were performed
+ * once and never again. A regression cannot appear in a check nobody repeats,
+ * so "no failures recorded" was not evidence of no regression.
+ *
+ * What is reported:
+ *  - a check that passed in an earlier round and failed in a later one is a
+ *    definite contradiction → warning.
+ *  - zero re-checks across two or more rounds contradicts 4-4 outright →
+ *    warning.
+ *  - anything in between is a rate, printed as an observation. The auditor
+ *    reports; stage 5 decides. */
+function receiptContinuity(receipts) {
+  const rounds = (receipts || []).filter(r => r.checks && r.checks.length);
+  if (rounds.length < 2) return null;
+  const seen = new Map();
+  const flips = [];
+  let carried = 0, total = 0;
+  rounds.forEach((rc, i) => {
+    for (const c of rc.checks) {
+      total++;
+      const prev = seen.get(c.key);
+      if (prev) {
+        carried++;
+        if (prev.pass === true && c.pass === false) {
+          flips.push({ from: prev.round + 1, to: i + 1, check: c.check });
+        }
+      }
+      seen.set(c.key, { round: i, pass: c.pass });
+    }
+  });
+  return { rounds: rounds.length, total, carried, flips,
+           rate: total ? Math.round((carried / total) * 100) : 0 };
 }
 
 /* ── Analysis ────────────────────────────────────────────────────── */
@@ -221,6 +277,23 @@ function analyze({ faillog, works }) {
         !/judgment-only/i.test(w.verification || '')) {
       report.warnings.push(`${w.file}: status=completed but no verification receipt found (SKILL 4-4)`);
     }
+
+    // Round-over-round continuity. Attached to the work entry so the normal
+    // output can print the rate even when there is nothing to warn about.
+    w.continuity = receiptContinuity(w.receipts);
+    if (w.continuity) {
+      for (const f of w.continuity.flips) {
+        report.warnings.push(
+          `${w.file}: a check that passed in receipt ${f.from} FAILS in receipt ${f.to} — ` +
+          `a fix broke something that used to hold: "${String(f.check).slice(0, 60)}"`);
+      }
+      if (w.continuity.carried === 0) {
+        report.warnings.push(
+          `${w.file}: ${w.continuity.rounds} verification rounds and not one check from an ` +
+          `earlier round was re-run in a later one. SKILL 4-4 requires re-running 4-1 after a ` +
+          `fix; a regression cannot appear in a check nobody repeats.`);
+      }
+    }
   }
 
   return report;
@@ -252,6 +325,11 @@ function main() {
       ? ` · receipts: ${w.receipts.map(x => `${x.items} item(s)${x.errors.length ? ' INVALID' : x.failing ? ` ${x.failing} FAILING` : ' ok'}`).join(', ')}`
       : '';
     console.log(`  - ${w.file} · status=${w.status} · counted=${w.counted} · task=${w.task}${rc}`);
+    if (w.continuity) {
+      const c = w.continuity;
+      console.log(`      re-check across rounds: ${c.carried}/${c.total} items (${c.rate}%) ` +
+        `over ${c.rounds} rounds — the rest were verified once and never again`);
+    }
   }
   console.log('\npromotion candidates (2+ distinct tasks, /other excluded):', r.candidates.length ? '' : 'none');
   for (const cd of r.candidates) console.log(`  - ${cd.key} · tasks: ${cd.tasks.join(', ')} · scopes: ${cd.scopes.join(', ') || '?'}`);
@@ -261,4 +339,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { parseFaillog, parseWork, parseReceipts, analyze };
+module.exports = { parseFaillog, parseWork, parseReceipts, receiptContinuity, analyze };

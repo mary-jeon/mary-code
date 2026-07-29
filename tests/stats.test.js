@@ -10,7 +10,7 @@
 const assert = require('assert');
 const path = require('path');
 
-const { parseFaillog, parseWork, parseReceipts, analyze } =
+const { parseFaillog, parseWork, parseReceipts, receiptContinuity, analyze } =
   require(path.join(__dirname, '..', 'scripts', 'mary-stats.js'));
 
 let pass = 0, fail = 0;
@@ -210,6 +210,90 @@ t('completed with a valid receipt is not flagged as missing', () => {
   const w = parseWork('---\nstatus: completed\ncounted_status: completed\ntask_id: 20260725-x-005\n---\n' + receipt, '_work-r5.md');
   const rr = analyze({ faillog: fl, works: [w] });
   assert.ok(!rr.warnings.some(x => x.includes('_work-r5.md')));
+});
+
+/* 4-4 requires re-running 4-1 after a fix. Whether that happened is computable
+ * from the receipts, and on real records it mostly had not: ~90 % of checks were
+ * run once and never again, so a regression had nowhere to show up. */
+console.log('\n[receipt continuity across rounds — SKILL 4-4 re-verification]');
+const receiptOf = (task, items) => '```json\n' + JSON.stringify({
+  receipt: 'verification', task_id: task, items,
+}) + '\n```\n';
+const item = (check, pass) => ({ check, cmd: 'ran it', observed: 'output', pass });
+const workWith = (file, task, ...receipts) =>
+  parseWork(`---\nstatus: active\ncounted_status: none\ntask_id: ${task}\n---\n` + receipts.join('\n'), file);
+
+t('one receipt cannot be compared and is not flagged', () => {
+  const w = workWith('_work-k1.md', '20260729-k-001', receiptOf('20260729-k-001', [item('a', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.strictEqual(w.continuity, null);
+  assert.ok(!rr.warnings.some(x => x.includes('_work-k1.md')));
+});
+t('a check that passed and later fails is a definite contradiction', () => {
+  const w = workWith('_work-k2.md', '20260729-k-002',
+    receiptOf('20260729-k-002', [item('render has no console error', true)]),
+    receiptOf('20260729-k-002', [item('render has no console error', false)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('_work-k2.md') && x.includes('FAILS in receipt')),
+    'a fix that broke a previously passing check must be reported');
+});
+t('wording drift does not hide the same check', () => {
+  const w = workWith('_work-k3.md', '20260729-k-003',
+    receiptOf('20260729-k-003', [item('Render: no console error.', true)]),
+    receiptOf('20260729-k-003', [item('render — no console error', false)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('FAILS in receipt')));
+});
+t('rounds that share nothing at all contradict 4-4', () => {
+  const w = workWith('_work-k4.md', '20260729-k-004',
+    receiptOf('20260729-k-004', [item('mass total', true), item('slope torque', true)]),
+    receiptOf('20260729-k-004', [item('render ok', true), item('BOM row count', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(rr.warnings.some(x => x.includes('_work-k4.md') && x.includes('re-run in a later one')));
+  assert.strictEqual(w.continuity.carried, 0);
+});
+t('re-running earlier checks clears the warning and reports a rate', () => {
+  const w = workWith('_work-k5.md', '20260729-k-005',
+    receiptOf('20260729-k-005', [item('mass total', true), item('slope torque', true)]),
+    receiptOf('20260729-k-005', [item('mass total', true), item('render ok', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(!rr.warnings.some(x => x.includes('_work-k5.md')));
+  assert.strictEqual(w.continuity.carried, 1);
+  assert.strictEqual(w.continuity.rounds, 2);
+  assert.strictEqual(w.continuity.rate, 25); // 1 of 4 items
+});
+t('receiptContinuity is a pure function over parsed receipts', () => {
+  const rs = parseReceipts(
+    receiptOf('t', [item('x', true)]) + receiptOf('t', [item('x', false), item('y', true)]));
+  const c = receiptContinuity(rs);
+  assert.strictEqual(c.rounds, 2);
+  assert.strictEqual(c.total, 3);
+  assert.strictEqual(c.carried, 1);
+  assert.strictEqual(c.flips.length, 1);
+  assert.strictEqual(c.flips[0].from, 1);
+  assert.strictEqual(c.flips[0].to, 2);
+});
+t('two long checks sharing a prefix are different checks', () => {
+  // A truncated identity key would merge these and emit a false pass→fail
+  // warning; the full normalized string must keep them apart.
+  const prefix = 'the assembled station renders with zero console errors and the BOM total mass stays under the';
+  const w = workWith('_work-k7.md', '20260729-k-007',
+    receiptOf('20260729-k-007', [item(prefix + ' 500 kg certification limit', true)]),
+    receiptOf('20260729-k-007', [item(prefix + ' 450 kg design target', false),
+                                 item(prefix + ' 500 kg certification limit', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.strictEqual(w.continuity.flips.length, 0,
+    'distinct checks must not be merged into a false pass→fail flip');
+  assert.ok(!rr.warnings.some(x => x.includes('_work-k7.md') && x.includes('FAILS')));
+});
+t('an unparseable receipt does not break continuity', () => {
+  const w = workWith('_work-k6.md', '20260729-k-006',
+    receiptOf('20260729-k-006', [item('a', true)]),
+    '```json\n{ "receipt": "verification", broken\n```\n',
+    receiptOf('20260729-k-006', [item('a', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.strictEqual(w.continuity.carried, 1, 'the two readable rounds still compare');
+  assert.ok(rr.warnings.some(x => x.includes('not valid JSON')));
 });
 
 console.log('\n[counted_status literals — SKILL 5.3 canonical strings (B1)]');

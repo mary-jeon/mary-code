@@ -307,6 +307,26 @@ not depend on the generator's reasoning — execution, tests derived from the sp
 measurement, original-source comparison, confirmation by an authorized owner.
 That evidence **exists** and that it **supports the current claim** are examined separately. ↔L8 L16
 
+**Rotate the review axis every round.** Round *n* uses axis `A → B → C → D → A …`:
+
+| Axis | Hunting |
+|---|---|
+| **A · specification conformance** | violates a completion condition, widens scope, satisfies the words but not the intent |
+| **B · state and structure** | what the *previous round's fix* changed elsewhere — a symbol, constant, or premise edited in one place and still assumed in another |
+| **C · boundary and regression** | edge and limit inputs; anything previously verified that the current evidence no longer covers |
+| **D · operation and downstream** | who consumes this next, what breaks for them, what is irreversible, what cannot be observed afterwards |
+
+**Name the axis in the instruction and record it in `_work.md`.** Repeating an open-ended
+"attack this" re-finds the same layer: it returns a long list every round while a defect on
+another layer survives all of them. Rotation is fixed by round number on purpose — it is not
+triggered by a metric, because any metric that decides when to change axis (a rejection rate,
+say) is also a metric the generator can satisfy by rejecting a valid finding, and rejecting a
+valid finding is worse than the problem it would be fixing.
+
+Axis **B** is first among equals: "the fix broke something else" is the most frequently
+observed failure here, and `mary-stats.js` reports how much of the previous round's evidence
+this round actually re-ran (see 4-4).
+
 **If the Agent tool is available**, run the critique independently, read-only.
 The plugin bundles a read-only `mary-critic` agent — **use it if present.** Its tools are
 restricted to read-only, so a reviewer mutating state mid-review is impossible by construction.
@@ -327,17 +347,21 @@ undetectable in principle:
 ```
 Attack the deliverable below.
 
+[Review axis for this round: A | B | C | D — and what it hunts]
 [Goal]
 [Completion conditions]
 [Out of scope]
 [Chosen approach and why]
 [Full deliverable]
 [Verification method and evidence so far]
+[What the previous round found and what was changed in response — required for axis B]
 
 Rules:
+- Spend the named axis first, then whatever attention is left on the rest.
 - No mention of what is good. Problems only.
 - No generalities like "caution is advised".
 - Sort by how likely the author missed it.
+- Mark any finding from outside the named axis.
 - If nothing: reply "none".
 
 Each finding must include:
@@ -362,9 +386,31 @@ Claude **adjudicates the findings itself.** Never pushed onto the user.
 If anything was fixed, run 4-1 again. Without checking whether the fix broke verification,
 "fixed it" is a report of the state from *before* 4-1.
 
+**Re-run the previous round's checks, not only the ones you just touched.** The new receipt
+carries the earlier round's items forward, with this round's observed values — same `check`
+wording, so they can be matched. A check that is dropped between rounds cannot report a
+regression: *"the fix broke something that used to pass"* is invisible in a check nobody
+repeats, and that is the failure observed most often in this log. When re-running everything is
+genuinely too expensive, carry forward the items **the fix could plausibly have touched** and
+write one line in `_work.md` saying what was dropped and why — a silent drop reads as "still
+verified".
+
+`mary-stats.js` computes this: it reports what share of receipt items were re-run in a later
+round, warns when a check that passed later fails, and warns when two or more rounds share no
+check at all. Measured on this project's own records when the check was added, the re-run share
+was around 10 % — so treat a low number as normal-but-wrong, not as someone else's problem.
+
 Report with evidence (output, diff, citations). **If it failed, write that it failed.**
 
-Write to `_work.md`: `- [4] verify <pass/fail> / counterexamples N (model: <…>) / fixes M / rejected K / re-verify <result>`.
+**Stagnation.** Count the completion conditions (stage 1) that this round *closed*. If **two
+consecutive rounds close none**, stop and go to the user with three lines: which conditions
+remain open, what the last two rounds actually changed, and the choice — continue, narrow the
+completion conditions, or stop at `paused`. Rounds that keep finding real defects are not
+progress by themselves; the completion conditions are the only thing that decides "done", so a
+loop that never moves one is a loop with no exit. **This is a report, not a decision** — the
+harness never narrows its own completion conditions.
+
+Write to `_work.md`: `- [4] verify <pass/fail> / counterexamples N (axis: <A|B|C|D> · model: <…>) / fixes M / rejected K / re-verify <result>`.
 
 **Verification receipt.** For Guarded tasks — and any task where 4-1 actually ran — condense the
 evidence into a machine-readable block in `_work.md`, one item per verifiable claim:
@@ -377,8 +423,10 @@ evidence into a machine-readable block in `_work.md`, one item per verifiable cl
   ] }
 ```
 
-`mary-stats.js` audits this block: missing fields and `pass: false` items are reported, and a task
-is not closed as `completed` while the auditor reports problems with its receipt. Prose
+`mary-stats.js` audits this block: missing fields, `pass: false` items, a receipt bound to another
+task's `task_id`, a check that passed in an earlier round and fails in a later one, and rounds
+that share no check at all are all reported — and a task is not closed as `completed` while the
+auditor reports problems with its receipt. Prose
 "I checked it" is exactly what L11 phantom-execution looks like from the outside; the receipt
 binds each claim to the command that ran and what it printed. A receipt nobody consumes is
 ritual — the auditor is the consumer that keeps it honest.

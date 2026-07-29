@@ -22,3 +22,6 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: node tests/gate.test.js
       - run: node tests/stats.test.js
+      # Decision snapshot: no gate judgment may move without a deliberate
+      # regeneration whose diff shows exactly what moved and in which direction.
+      - run: node tests/decisions.test.js

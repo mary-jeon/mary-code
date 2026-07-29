@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.0 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.3 · Experimental · Claude Code**
 >
 > **English** (canonical) · [한국어](./README.ko.md)
 
@@ -138,15 +138,18 @@ The gate's job is **routing to a human, not classification.** No pattern set rea
 The Rv.0 hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
 
 - file deletion, including non-recursive and path-prefixed forms (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`);
-- `git push` (with global options such as `-C` tolerated; `--dry-run` exempts only the command segment it appears in), destructive Git reset/clean operations, forced branch deletion, or `--no-verify` bypasses;
-- GitHub repository, release, or gist deletion through `gh`, and `gh api` calls with the DELETE method;
-- destructive SQL patterns;
-- disk overwrite and truncation commands;
+- `git push` (with global options such as `-C` and quoted values such as `-c core.pager="less -n"` tolerated). The `--dry-run` exemption is **parsed, not string-matched**: it counts only when the flag is a real argument of that `push`, in that command segment — a commented-out flag, a `-n` that is the value of `--push-option`, or one borrowed from a config value does not buy it. Also destructive Git reset/clean operations, forced branch deletion, and `--no-verify` bypasses;
+- discarding uncommitted work and destroying the recovery net: `git checkout -- .` / `git checkout .` / `-f`, `git restore` (except `--staged` without `--worktree`, which only unstages), `git switch -f`/`--discard-changes`, `git stash clear`/`drop`, `git reflog expire`, `git gc --prune`, `git filter-branch`/`filter-repo`, `git tag -d`, `git update-ref -d`, `git worktree remove`, `git submodule deinit`;
+- GitHub through `gh`: repository, release, gist, or secret deletion; `gh api` with DELETE, POST, PUT, or PATCH; `gh pr merge`/`close`; `gh release create`; `gh secret set`;
+- destructive SQL and its equivalents in non-SQL stores (`drop table`/`database`/`schema`/`index`/`view`, `delete from`, `truncate`, `FLUSHALL`/`FLUSHDB`, mongo `dropDatabase()` / `drop()` / `deleteMany({})`) — the bare-object forms only next to a DB client, so a commit message saying "drop database support" does not trip the gate;
+- disk overwrite and truncation commands, including whole-volume destruction (`mkfs`, `diskpart`/`fdisk`/`parted`, `Format-Volume`, `Clear-Disk`) and Windows `rd /s /q`;
 - HTTP commands that send data, including upload forms (`-F`/`--form`, `-T`/`--upload-file`, `--json`, `--data-*`);
-- remote sync and cloud deletion (`rsync --delete`, `scp`/`rsync` to `user@host:` targets, `aws s3 rm`/`rb`/`sync --delete`);
-- package publication and selected deployment commands;
-- shell-wrapper and encoding invocations that would launder a command past pattern inspection (`bash -c`, interpreter one-liners such as `python -c` / `node -e`, `powershell -EncodedCommand`, `ssh host <command>`, piping a download into a shell, `eval`) — the wrapped content cannot be judged, so the wrapping itself is treated as "cannot judge → ask"; or
-- edits to Mary's own settings, manifest, hook registration, hook scripts, or the approval ledger (`approvals.jsonl`) — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, `ln`, or a PowerShell write cmdlet. A ledger that can be edited quietly stops being evidence.
+- remote sync and cloud deletion (`rsync --delete`, `scp`/`rsync` to `user@host:` targets, `aws s3 rm`/`rb`/`sync --delete`, `aws <service> delete-*`/`terminate-*`, `gcloud … delete`, `az … delete`, `helm uninstall`, `docker … prune`);
+- package publication and withdrawal — `npm publish`/`unpublish`/`deprecate`, `cargo publish`/`yank`, `gem push`, `twine upload`, `poetry publish`, `dotnet nuget push`, `mvn deploy` — and selected deployment commands. Taking a published version back is not a rollback: the name stays reserved and downstream lockfiles break immediately;
+- shell-wrapper and encoding invocations that would launder a command past pattern inspection (`bash -c`, interpreter one-liners such as `python -c` / `node -e`, `powershell -EncodedCommand`, `ssh host <command>`, piping a download into a shell, `eval`) — the wrapped content cannot be judged, so the wrapping itself is treated as "cannot judge → ask". **Clustered short options count**: `bash -lc`, `sh -ec`, `python3 -Ic`, `perl -we` run the string exactly like `-c` does. `perl -E` and `php -R` are a separate case-sensitive entry, so that node's `-r` (module preload, which runs a *file*) is not read as code; or
+- edits to Mary's own settings, manifest, hook registration, hook scripts, the approval ledger (`approvals.jsonl`), or the notifier configuration (`notify.json`, which names the URL and headers every approval ping is POSTed to) — by path for the Write-family tools, and for Bash when a protected path appears together with a write indicator such as redirection, `sed -i`, `tee`, `cp`/`mv`, `ln`, or a PowerShell write cmdlet. A ledger that can be edited quietly stops being evidence.
+
+Because every pattern above anchors on a word boundary (`(^|[\s;&|])name`), the shell's own quote removal would otherwise defeat it — `"rm" -rf`, `'rm'`, `r\m`, `git "push"`, `$'rm'` all execute while containing no bare word to match. Quotes are therefore stripped from the **command word only**, per segment, walking wrapper grammar (`sudo -u root "rm"`, `env FOO=1 "rm"`, `timeout 5 "rm"`) and redirections, which may sit in front of the command word (`>/dev/null "rm" -rf`) or between a wrapper and its command (`sudo >/dev/null "rm"`). The normalized string is matched *in addition to* the raw one. Argument quoting is left exactly as written, which is what keeps `echo "rm -rf /"` and `git commit -m "rm -rf fix"` at `defer`.
 
 Self-protection is **anchored**: plugin-relative paths (`scripts/`, `hooks/hooks.json`, `.claude-plugin/plugin.json`) are protected only under the plugin's actual install root — the same names in unrelated repositories do not trigger the gate. Host-level enforcement files (`.claude/settings*.json`, `managed-settings.json`) and the ledger are protected at any path. A gate that cries wolf trains the user to approve without reading, which defeats the gate.
 
@@ -184,7 +187,7 @@ If no matching result arrives, the approval remains open. At the next session st
 
 ```
 node scripts/mary-reconcile.js --list
-node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "<what was observed>"
+node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|denied|superseded --evidence "<what was observed>"
 ```
 
 Evidence is mandatory (a closure without observation is the phantom-execution failure the ledger exists to prevent), the ledger stays append-only, one asked instance closes per invocation, and a hash that was never asked cannot be closed. `reconciled` grants nothing — it only stops a resolved unknown from being re-reported every session.
@@ -329,14 +332,14 @@ The plugin components must stay together.
 - The decision-retrace engine is specified but not implemented.
 - The hook recognizes a defined set of tools and patterns; it does not mediate every possible tool, command, external send, or business-system write.
 - The Bash self-protection check pairs a protected-path mention with a write indicator. It is a visibility heuristic, not a parser; a sufficiently indirect shell command can still avoid it.
-- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented. **Observed so far (macOS build, 2026-07-26, 9 asked / 0 denied over real use): the event was never emitted** — manual denials stayed `unknown`. A denial that is never observed stays open and is reported as `unknown` at the next session start — `mary-reconcile.js` closes it once a human has observed what actually happened.
+- Whether the host emits `PermissionDenied` for a manual user denial is not fully documented; the hook reference describes the event as firing "when a tool call is denied by the auto mode classifier". **Observed so far — macOS build 2026-07-26 (9 asked / 0 denied), and a Windows ledger spanning 2026-07-24 → 07-29 (171 asked / 0 denied over 999 records): the event has never been emitted** — manual denials stayed `unknown`. A denial that is never observed stays open and is reported as `unknown` at the next session start. Since 0.4.2, `mary-reconcile.js --outcome denied` records that as a refusal rather than as a lost outcome, and the session-start report warns that some unknowns may be refusals rather than actions to chase down. The hook still cannot tell the two apart on its own.
 - Cross-session warnings match by working-directory string. Two clones of the same remote in different folders are shared external state the gate cannot see.
 - The trifecta sentinel observes two legs (untrusted input, external send). Private-data access, the third, is not reliably detectable from tool calls and is deliberately not claimed.
 - A separate LLM reviewer may share the generator's biases. It is not a substitute for observable evidence.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.4.0 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
+**Current version: Rv.0 / plugin 0.4.3 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
 
 Working now:
 
@@ -351,14 +354,17 @@ Working now:
 - gated-calls-only ledger recording, with no tool response bodies stored;
 - unresolved approval reporting through `SessionStart`, and `reconciled` closure after human observation;
 - cross-session and lethal-trifecta context warnings in the approval text;
-- verification-receipt auditing in `mary-stats.js`;
+- verification-receipt auditing in `mary-stats.js`, including round-over-round continuity — what share of a round's checks were re-run later, a check that passed and then failed, and rounds that share no check at all;
+- a rotating counterexample axis (specification · state and structure · boundary and regression · operation), so repeated rounds stop re-finding the same layer of defects;
+- a stagnation stop: two consecutive rounds that close no completion condition are reported to the user rather than looped on;
 - an optional "approval waiting" webhook ping (`Notification` hook, no command content);
 - one-command managed (administrator) deployment scripts;
 - a bundled read-only critic agent and a deterministic counter auditor;
 - a published threat model ([`docs/threat-model.md`](docs/threat-model.md)) covering demonstrated-and-closed bypasses and the surfaces open by construction;
-- secret masking on stored ledger copies, plugin-root-anchored self-protection, and a segment-aware `--dry-run` exemption;
-- continuous integration (GitHub Actions, Node 20/22 on Linux and Windows); and
-- 154 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting.
+- secret masking on stored ledger copies, plugin-root-anchored self-protection, a parsed (not string-matched) `--dry-run` exemption, and command-word quote normalization;
+- continuous integration (GitHub Actions, Node 20/22 on Linux and Windows, every matrix leg run to completion); and
+- 266 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
+- a 267-command decision snapshot (`tests/decisions.test.js`): every pinned judgment — `ask` with its category, or `defer` — fails CI if it moves in either direction, so a weakened decision can only ship through a deliberate snapshot regeneration whose diff shows exactly what moved.
 
 In development:
 

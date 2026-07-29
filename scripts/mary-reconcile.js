@@ -3,7 +3,7 @@
  * Mary — close an open approval after observing its real side effects
  *
  *   node scripts/mary-reconcile.js --list
- *   node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded \
+ *   node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|denied|superseded \
  *       --evidence "<what was actually observed>" [--note "<context>"]
  *
  * An approval whose outcome was never recorded is **unknown** — not failed.
@@ -27,7 +27,14 @@
 
 const { append, openApprovals } = require('./hooks/lib/ledger');
 
-const OUTCOMES = new Set(['ran', 'not-run', 'superseded']);
+/* `denied` exists because the host does not reliably tell us about a refusal.
+ * The `PermissionDenied` event fires for auto-mode classifier denials; a person
+ * clicking "no" on the prompt has produced no closing record in any ledger
+ * observed so far (macOS 9 asked / 0 denied; Windows 171 asked / 0 denied). So a
+ * refused action stays open and is reported as `unknown` — which reads as "go
+ * find out whether it ran" for something the user simply refused. Recording it
+ * as `not-run` is true but loses why; `denied` keeps the reason in the ledger. */
+const OUTCOMES = new Set(['ran', 'not-run', 'denied', 'superseded']);
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -74,7 +81,7 @@ function main() {
         : ''));
     });
     console.log('\nClose one after observing its side effects:');
-    console.log('  node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|superseded --evidence "..."');
+    console.log('  node scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|denied|superseded --evidence "..."');
     return;
   }
 
@@ -88,7 +95,7 @@ function main() {
     process.exit(1);
   }
   if (!args.outcome || !OUTCOMES.has(args.outcome)) {
-    console.error('Missing or invalid --outcome. One of: ran | not-run | superseded');
+    console.error('Missing or invalid --outcome. One of: ran | not-run | denied | superseded');
     process.exit(1);
   }
   if (!args.evidence || !String(args.evidence).trim()) {
