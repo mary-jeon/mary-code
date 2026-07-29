@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.4.4 — 2026-07-29
+
+Pre-merge hardening. Before 0.4.3 reached `main`, an independent adversarial
+review attacked the release delta; twelve findings came back and all twelve
+were confirmed by execution. None was a regression against `main` — every one
+was a gap in the new protections or a defect in the new auditing — but the
+release said "closed" about routes that were open, so they were fixed before
+merging rather than after.
+
+### The finding that matters most: the snapshot pinned its own bugs
+
+`2>&1 "rm" -rf /d` executed for real and the gate deferred — `commandParts`
+split on the `&` of the redirection, so the segment's command word became `1`
+and the redirection walker never ran. The case sat in the corpus **inside the
+A1 section that existed to prove redirections fixed**, pinned `defer`, and
+267/267 green was agreement with the bug. Same shape twice more: the
+`echo "please truncate the file"` false positive was pinned `ask` inside a
+"must stay defer" block, and `ln -sf …` was pinned `defer` inside "must stay
+ask" (correctly — the corpus runs outside the plugin root — but the placement
+asserted the opposite of the pin).
+
+The fix is structural, not just the three cases: corpus section headers now
+carry their intent, and `decisions.test.js` fails — `--update` mode included —
+whenever a pin contradicts the block it sits in. That audit immediately caught
+five more misplaced pins beyond the review's findings (`echo "git push"`,
+`psql -f migrate.sql`, `npm publish --dry-run`, `git checkout HEAD~1 -- `,
+`git restore --staged file.txt`); each was fixed or moved with its reason
+written next to it.
+
+### Gate
+
+- fd-duplication before the command word (`2>&1 "rm"`, `1>&2 "rm"`, `>&2`,
+  `&>>log`) now asks; a lone background `&` still separates commands.
+- `git checkout main -f` / `--force` (flag after the ref) and pathspec
+  checkouts (`git checkout ./subdir`, `.github/…` — a ref cannot begin with a
+  dot) now ask; `git checkout feature/topic` still defers.
+- `aws` global flags before the service (`aws --profile prod rds delete-…`)
+  are walked by name; unknown globals keep erring toward defer.
+- `gh api` with a field flag (`-f`/`-F`/`--field`) is an implicit POST and
+  asks unless the method is explicitly GET.
+- `GIT tag -d` asks regardless of command casing (`/i` — unlike `branch -D`,
+  tag deletion has no case distinction to preserve).
+- False positives closed by replacing quoted spans with an inert placeholder
+  before matching: `echo "please truncate the file"`,
+  `git commit -m "add FLUSHALL guard"`, `echo "git push"` (open since 0.4.2).
+  A quoted command word still asks (`"truncate" -s 0 f`), and quoted `FLUSHALL`
+  next to a Redis client still asks. A placeholder rather than deletion:
+  erasing `-C "/repo"`'s value let the option pattern consume `push` as the
+  value — the snapshot differential caught that regression during this fix.
+
+### Auditor (mary-stats)
+
+- The no-continuity warning fired only when **zero** checks were ever re-run
+  across the whole file; `R1{a} R2{b} R3{a}` passed silently, and an in-round
+  duplicate counted as "carried". Rounds now dedupe internally, and any round
+  that re-runs nothing from every earlier round is warned about by number.
+- The check-identity key kept only `[a-z0-9가-힣]`: it merged `mass > 500`
+  with `mass < 500` (manufacturing the exact false flip the normalization
+  exists to prevent) and normalized a Japanese or Chinese receipt to the empty
+  string, silently disabling the continuity audit. The key now keeps letters
+  and digits of every script plus comparison operators.
+
+### Corrections to 0.4.3's own text
+
+- "267 commands" was 265 — two corpus entries were duplicates; nobody diffed
+  the corpus against the snapshot key count. The corpus is now 287 unique
+  cases and the duplicates are gone.
+- "seven new stats cases" was eight (31 → 39).
+- The continuity measurement was cited with two different value sets
+  (CHANGELOG: "8 of 64 over 6 rounds"; code comment: "5 of 54 over 5 rounds").
+  Re-measured 2026-07-29 with the fixed key on the same two records:
+  4 of 30 items over 3 rounds and 14 of 132 over 18 rounds — "about 90 % never
+  re-run" stands, and both texts now cite this measurement.
+- Test fixtures that carried working-project vocabulary were genericized.
+
+Tests: 249 gate + 43 stats unit checks, 287-case decision snapshot with the
+section-intent audit. The snapshot regeneration diff for this release shows
+2 weakened (both documented false positives), 3 strengthened, 22 new pins.
+
 ## 0.4.3 — 2026-07-29
 
 Workflow-side release. External feedback proposed three changes to the procedure;
@@ -51,8 +130,8 @@ a blind spot.)
 
 The feedback attributed a non-terminating task to completion conditions being
 qualitative. The records do not support that: the task's conditions included
-`0 items`, `0 console errors`, `3 open items`, and later `≤10 %`, `≥80 %
-(currently 20.7 %)`. The harness gave a stop criterion; the answer was "not yet".
+`0 items`, `0 console errors`, `3 open items`, and later quantitative
+percentage thresholds. The harness gave a stop criterion; the answer was "not yet".
 The real gap was next to it — nothing noticed that the loop was not moving. So:
 **two consecutive rounds that close no completion condition → stop and report**
 (which conditions remain open, what the last two rounds changed, and the choice

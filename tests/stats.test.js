@@ -246,15 +246,15 @@ t('wording drift does not hide the same check', () => {
 });
 t('rounds that share nothing at all contradict 4-4', () => {
   const w = workWith('_work-k4.md', '20260729-k-004',
-    receiptOf('20260729-k-004', [item('mass total', true), item('slope torque', true)]),
-    receiptOf('20260729-k-004', [item('render ok', true), item('BOM row count', true)]));
+    receiptOf('20260729-k-004', [item('mass total', true), item('torque margin', true)]),
+    receiptOf('20260729-k-004', [item('render ok', true), item('row count', true)]));
   const rr = analyze({ faillog: fl, works: [w] });
   assert.ok(rr.warnings.some(x => x.includes('_work-k4.md') && x.includes('re-run in a later one')));
   assert.strictEqual(w.continuity.carried, 0);
 });
 t('re-running earlier checks clears the warning and reports a rate', () => {
   const w = workWith('_work-k5.md', '20260729-k-005',
-    receiptOf('20260729-k-005', [item('mass total', true), item('slope torque', true)]),
+    receiptOf('20260729-k-005', [item('mass total', true), item('torque margin', true)]),
     receiptOf('20260729-k-005', [item('mass total', true), item('render ok', true)]));
   const rr = analyze({ faillog: fl, works: [w] });
   assert.ok(!rr.warnings.some(x => x.includes('_work-k5.md')));
@@ -276,15 +276,55 @@ t('receiptContinuity is a pure function over parsed receipts', () => {
 t('two long checks sharing a prefix are different checks', () => {
   // A truncated identity key would merge these and emit a false pass→fail
   // warning; the full normalized string must keep them apart.
-  const prefix = 'the assembled station renders with zero console errors and the BOM total mass stays under the';
+  const prefix = 'the assembled fixture renders with zero console errors and the total mass stays under the';
   const w = workWith('_work-k7.md', '20260729-k-007',
-    receiptOf('20260729-k-007', [item(prefix + ' 500 kg certification limit', true)]),
-    receiptOf('20260729-k-007', [item(prefix + ' 450 kg design target', false),
-                                 item(prefix + ' 500 kg certification limit', true)]));
+    receiptOf('20260729-k-007', [item(prefix + ' 500 kg design limit', true)]),
+    receiptOf('20260729-k-007', [item(prefix + ' 450 kg stretch target', false),
+                                 item(prefix + ' 500 kg design limit', true)]));
   const rr = analyze({ faillog: fl, works: [w] });
   assert.strictEqual(w.continuity.flips.length, 0,
     'distinct checks must not be merged into a false pass→fail flip');
   assert.ok(!rr.warnings.some(x => x.includes('_work-k7.md') && x.includes('FAILS')));
+});
+t('a later round re-running an OLD check does not excuse the round between', () => {
+  // R1{a} R2{b} R3{a}: whole-file carried is 1, but round 2's fix was never
+  // re-checked against anything — the 0.4.3 code warned only on carried === 0
+  // and this shape passed silently.
+  const w = workWith('_work-k8.md', '20260729-k-008',
+    receiptOf('20260729-k-008', [item('alpha', true)]),
+    receiptOf('20260729-k-008', [item('beta', true)]),
+    receiptOf('20260729-k-008', [item('alpha', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.deepStrictEqual(w.continuity.coldRounds, [2]);
+  assert.ok(rr.warnings.some(x => x.includes('_work-k8.md') && x.includes('re-ran nothing')));
+});
+t('an in-round duplicate is one check and cannot satisfy continuity', () => {
+  const w = workWith('_work-k9.md', '20260729-k-009',
+    receiptOf('20260729-k-009', [item('gamma: 0 errors', true), item('gamma — 0 errors', true)]),
+    receiptOf('20260729-k-009', [item('delta', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.strictEqual(w.continuity.total, 2, 'the duplicate collapses within its round');
+  assert.strictEqual(w.continuity.carried, 0);
+  assert.ok(rr.warnings.some(x => x.includes('_work-k9.md') && x.includes('re-run in a later one')));
+});
+t('a comparison operator makes a different check, not a false flip', () => {
+  const w = workWith('_work-k10.md', '20260729-k-010',
+    receiptOf('20260729-k-010', [item('mass > 500', true)]),
+    receiptOf('20260729-k-010', [item('mass < 500', false), item('mass > 500', true)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.strictEqual(w.continuity.flips.length, 0,
+    'operator-only differences are different checks, not a pass→fail flip');
+  assert.ok(!rr.warnings.some(x => x.includes('_work-k10.md') && x.includes('FAILS')));
+});
+t('a receipt in any script keeps its continuity audit', () => {
+  // The old identity key kept only [a-z0-9가-힣]; a Japanese receipt normalized
+  // to the empty string and the file silently lost its audit entirely.
+  const w = workWith('_work-k11.md', '20260729-k-011',
+    receiptOf('20260729-k-011', [item('描画エラーなし', true)]),
+    receiptOf('20260729-k-011', [item('描画エラーなし', false)]));
+  const rr = analyze({ faillog: fl, works: [w] });
+  assert.ok(w.continuity, 'a non-Korean CJK receipt must not normalize to nothing');
+  assert.strictEqual(w.continuity.flips.length, 1);
 });
 t('an unparseable receipt does not break continuity', () => {
   const w = workWith('_work-k6.md', '20260729-k-006',

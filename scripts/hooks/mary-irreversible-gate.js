@@ -68,10 +68,10 @@ const GIT = '\\bgit(?:\\s+(?:-C\\s+' + GIT_VAL + '|-c\\s+' + GIT_VAL
   + '|--namespace(?:=|\\s+)' + GIT_VAL + '|--no-pager|--paginate|-[pP]))*\\s+';
 const GIT_PUSH_RE = new RegExp(GIT + 'push\\b', 'i');
 /* Command-position form. `GIT` alone starts with `\bgit`, which also matches the
- * word inside quoted argument text — `echo "git push"` asks, a known and
- * pre-existing false positive. New entries use this form instead so they do not
- * add more of that noise: a gate that cries wolf trains the user to approve
- * without reading. */
+ * word inside quoted argument text — `echo "git push"` used to ask because of
+ * it (closed in 0.4.4: the push entry now matches against stripQuotedSpans).
+ * New entries use this form so they do not add that noise: a gate that cries
+ * wolf trains the user to approve without reading. */
 const GIT_CMD = '(?:^|[\\s;&|])' + GIT;
 /* A dry-run exemption is only honoured when the flag is a real argument of the
  * push itself. Testing the raw segment for /--dry-run|-n/ is exempted by three
@@ -341,6 +341,12 @@ function commandParts(cmd) {
     if (c === '\\' && i + 1 < s.length) { i++; continue; }
     let n = 0;
     if ((c === '&' || c === '|') && s[i + 1] === c) n = 2;
+    // `&` that is part of a redirection is not a command separator: `2>&1`,
+    // `>&file`, `<&0` (fd duplication, `&` preceded by `>`/`<`) and `&>`/`&>>`
+    // (redirect-all, `&` followed by `>`). Splitting there cut `2>&1 "rm" -rf`
+    // into a segment whose command word was `1` — the redirection walker never
+    // saw the token and the quoted command word was never unquoted.
+    else if (c === '&' && (s[i - 1] === '>' || s[i - 1] === '<' || s[i + 1] === '>')) continue;
     else if (c === '&' || c === '|' || c === ';' || c === '\n') n = 1;
     if (!n) continue;
     if (start < i) out.push({ text: s.slice(start, i), separator: false });
@@ -350,6 +356,18 @@ function commandParts(cmd) {
   }
   if (start < s.length) out.push({ text: s.slice(start), separator: false });
   return out;
+}
+
+/** Replace quoted spans with an inert placeholder WORD. For registry words that
+ * also live in ordinary English (`truncate`, `FLUSHALL`, `git push`), a quoted
+ * occurrence is argument text — but a quoted COMMAND word has already been
+ * unquoted into the normalized string, which patternHits tests too, so the
+ * replacement removes prose without un-catching `"truncate" -s 0 f`.
+ * A word, not a space: an option's quoted value must still occupy its value
+ * slot — erasing it left `git -C "/repo" push` as `-C   push`, and the option
+ * pattern consumed `push` as the value of `-C`. */
+function stripQuotedSpans(s) {
+  return String(s).replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '_q_');
 }
 
 /** The command as the shell would see it in command position, per segment. */
@@ -372,12 +390,21 @@ const BASH_PATTERNS = [
   { re: /(^|[\s;&|])(\S*[\\/])?(rmdir|del|Remove-Item|Clear-Content)\b/i, category: 'deletion' },
   { re: /(^|[\s;&|])find\b[^\n]*\s-delete\b/i,           category: 'deletion' },
   { re: /(^|[\s;&|])(\S*[\\/])?shred\b/i,                category: 'deletion' },
-  { re: /(^|[\s;&|])(\S*[\\/])?truncate\b/i,             category: 'overwrite' },
+  // `truncate` is also an English verb; the raw-string test fired inside
+  // quoted prose ("please truncate the file"). Quoted spans are argument text —
+  // a quoted COMMAND word has already been unquoted into the normalized string
+  // patternHits also tests, so `"truncate" -s 0 f` still asks.
+  { test: cmd => /(^|[\s;&|])(\S*[\\/])?truncate\b/i.test(stripQuotedSpans(cmd)),
+    category: 'overwrite' },
   // Per-segment: --dry-run only exempts the segment it appears in. Tested
   // against segments so a real push cannot hide behind an exempting string
   // in a neighboring command. The exemption itself is parsed, not pattern-
   // matched, so a commented-out or borrowed `-n` cannot buy it.
-  { test: cmd => splitSegments(cmd).some(s => GIT_PUSH_RE.test(s) && !gitPushIsDryRun(s)),
+  // The push MATCH ignores quoted spans (`echo "git push"` is prose — the same
+  // rule as truncate/FLUSHALL below; a quoted command word is already unquoted
+  // in the normalized string patternHits also feeds through here). The dry-run
+  // exemption still parses the segment as given.
+  { test: cmd => splitSegments(cmd).some(s => GIT_PUSH_RE.test(stripQuotedSpans(s)) && !gitPushIsDryRun(s)),
     category: 'external send' },
   { re: new RegExp(GIT + '(reset\\s+--hard|clean\\s+-\\w*[fdx])', 'i'), category: 'overwrite' },
   // Discarding uncommitted work. `git reset --hard` and `git clean` were already
@@ -385,7 +412,12 @@ const BASH_PATTERNS = [
   // not. What they destroy was never committed, so no reflog entry can restore
   // it — this is strictly less recoverable than the two already covered.
   // `git checkout <branch>` and `-b` stay out: they switch, they do not discard.
-  { re: new RegExp(GIT_CMD + 'checkout\\s+((-f|--force)\\b|(\\S+\\s+)*--\\s|\\.(\\s|$))', 'i'), category: 'overwrite' },
+  // Flags may follow the ref (`git checkout main -f` discards like `-f main`),
+  // and any argument beginning with `.` is a pathspec, not a ref — a ref
+  // component cannot start with a dot (git-check-ref-format) — so
+  // `git checkout ./subdir` and `git checkout .github/workflows` overwrite
+  // uncommitted edits under those paths.
+  { re: new RegExp(GIT_CMD + 'checkout\\s+(\\S+\\s+)*(-\\w*f\\b|--force\\b|--\\s|\\.\\S*(\\s|$))', 'i'), category: 'overwrite' },
   { test: cmd => splitSegments(cmd).some(s => GIT_RESTORE_RE.test(s) && !gitRestoreIsUnstageOnly(s)),
     category: 'overwrite' },
   // `git switch -f|--force|--discard-changes` throws away local modifications on
@@ -400,7 +432,10 @@ const BASH_PATTERNS = [
   // "just restore it from the reflog" is gone too.
   { re: new RegExp(GIT_CMD + 'reflog\\s+expire\\b', 'i'),               category: 'deletion' },
   { re: new RegExp(GIT_CMD + 'gc\\b[^\\n]*--prune\\b', 'i'),            category: 'deletion' },
-  { re: new RegExp(GIT_CMD + 'tag\\s+(\\S+\\s+)*(-\\w*d\\b|--delete\\b)'), category: 'deletion' },
+  // /i, unlike `branch -D` above: tag deletion is lowercase `-d` — there is no
+  // capital/lowercase severity distinction to preserve, so command-name casing
+  // (`GIT tag -d`, which Windows runs) must not change the judgment.
+  { re: new RegExp(GIT_CMD + 'tag\\s+(\\S+\\s+)*(-\\w*d\\b|--delete\\b)', 'i'), category: 'deletion' },
   { re: new RegExp(GIT_CMD + 'update-ref\\s+(\\S+\\s+)*(-d\\b|--delete\\b)', 'i'), category: 'deletion' },
   { re: new RegExp(GIT_CMD + 'worktree\\s+remove\\b', 'i'),             category: 'deletion' },
   { re: new RegExp(GIT_CMD + 'submodule\\s+deinit\\b', 'i'),            category: 'deletion' },
@@ -414,6 +449,12 @@ const BASH_PATTERNS = [
   // Any write method through `gh api` is a business-system write with no undo
   // on the other side; only DELETE was registered.
   { re: /\bgh\s+api\b[^\n]*(-X|--method)[\s=]+(POST|PUT|PATCH)\b/i, category: 'external send' },
+  // gh api switches to POST the moment a field flag appears — no -X required.
+  // `gh api …/issues -f title=x` writes; only an explicit GET keeps field
+  // flags read-only (they become query parameters).
+  { test: cmd => /\bgh\s+api\b/i.test(cmd) && /(\s-[fF]\b|\s--(raw-)?field\b)/.test(cmd)
+      && !/(-X|--method)[\s=]+GET\b/i.test(cmd),
+    category: 'external send' },
   { re: /\bgh\s+(release|secret|variable)\s+(create|set)\b/i, category: 'deployment' },
   { re: /\bgh\s+pr\s+(merge|close)\b/i,                  category: 'external send' },
   // Destructive SQL, two tiers. The classic verb+keyword forms are unambiguous
@@ -426,7 +467,12 @@ const BASH_PATTERNS = [
   { test: cmd => /\b(psql|mysql|mariadb|sqlite3?|mongosh?|clickhouse-client|duckdb)\b/i.test(cmd)
       && /\b(drop\s+(database|schema|table|index|view)|delete\s+from|truncate\s+(table\s+)?\w)/i.test(cmd),
     category: 'business-system write' },
-  { re: /(^|[\s;&|"'])(FLUSHALL|FLUSHDB)\b/i,            category: 'business-system write' },
+  // Same prose collision as bare-object SQL: "add FLUSHALL guard" is a commit
+  // message. Unquoted occurrences ask anywhere; quoted ones only next to a
+  // Redis client (`echo "FLUSHALL" | redis-cli` is a real flush).
+  { test: cmd => /(^|[\s;&|])(FLUSHALL|FLUSHDB)\b/i.test(stripQuotedSpans(cmd))
+      || (/\bFLUSH(ALL|DB)\b/i.test(cmd) && /\b(redis-cli|valkey-cli)\b/i.test(cmd)),
+    category: 'business-system write' },
   { re: /\.(dropDatabase|dropIndexes)\s*\(|\.drop\s*\(\s*\)|deleteMany\s*\(\s*\{\s*\}\s*\)/,
     category: 'business-system write' },
   { re: /\bdd\s+if=/i,                                   category: 'overwrite' },
@@ -448,7 +494,12 @@ const BASH_PATTERNS = [
   // position — `az group show --name delete`, `gcloud … list --filter delete` —
   // reads as the verb. The cost is missing `az --output json group delete`
   // (flag before the verb), which errs toward defer, not toward a false ask.
-  { re: /\baws\s+[\w-]+\s+(delete|terminate|destroy|remove)[\w-]*\b/i, category: 'deletion' },
+  // Global flags before the service (`aws --profile prod rds delete-…`) are the
+  // standard multi-account spelling. The value-taking globals are enumerated by
+  // name — a generic "flag plus maybe-value" guess cannot tell `--no-paginate
+  // rds` (flag, then service) from `--profile prod` (flag and value). Unknown
+  // globals err toward defer, the same trade the gcloud/az pattern documents.
+  { re: /\baws\s+((--profile|--region|--endpoint-url|--output|--color|--cli-connect-timeout|--cli-read-timeout|--query)([=\s]+\S+)?\s+|--no-[\w-]+\s+|--debug\s+)*[a-z][\w-]*\s+(delete|terminate|destroy|remove)[\w-]*\b/i, category: 'deletion' },
   { re: /\b(gcloud|az)\s+(?:[A-Za-z][\w-]*\s+)+delete\b/i, category: 'deletion' },
   { re: /\bhelm\s+(uninstall|delete)\b/i,                category: 'deployment' },
   { re: /\bdocker\s+(system|volume|image|container|network|builder)\s+prune\b/i, category: 'deletion' },

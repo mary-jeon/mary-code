@@ -116,7 +116,34 @@ with `echo` in place of `rm`).
 
 New `git` entries anchor to command position (`GIT_CMD`), so a dangerous
 subcommand quoted inside argument text (`echo "git restore ."`) stays `defer`.
-The pre-existing `echo "git push"` false positive is unchanged and still open.
+The pre-existing `echo "git push"` false positive was closed in 0.4.4 (below).
+
+### Closed in 0.4.4 (independent adversarial review of the 0.4.3 release, 2026-07-29)
+
+A second-perspective critique attacked the 0.4.3 delta; every finding was
+reproduced by execution before being fixed, and the fd-duplication route was
+confirmed to run for real (`2>&1 "echo" ran-anyway` prints). The review's
+sharpest observation was about the snapshot itself: **a regenerated snapshot
+pins the gate's actual output, so wherever the gate already disagreed with the
+corpus's section intent, "267/267 green" was agreement with the bug** — the
+`2>&1` bypass sat pinned as `defer` inside the very section that existed to
+prove redirections fixed. The corpus section headers now carry their intent
+("must ask" / "must stay defer") and `decisions.test.js` fails — in `--update`
+mode too — when a pin contradicts the block it sits in. That audit immediately
+caught five more misplaced or contradictory pins beyond the review's findings.
+
+| # | Bypass | Fix |
+|---|---|---|
+| A-3 | `2>&1 "rm" -rf /d`, `1>&2 "rm" …`, `>&2 "rm" …` — `commandParts` split on the unquoted `&` of a redirection, so the segment's command word became `1` and the A-1 walker never saw the token | the splitter reads `>&`/`<&`/`&>`/`&>>` as redirection text, not separators; a lone background `&` still separates |
+| B-9 | `git checkout main -f` / `--force` (flag after the ref — the same commit fixed exactly this shape for `switch` and missed `checkout`) and `git checkout ./subdir` / `.github/…` (dot-leading arguments are pathspecs; a ref cannot begin with a dot) — all discard uncommitted work | flags accepted after arguments; dot-leading arguments read as pathspecs |
+| B-10 | `aws --profile prod rds delete-…` (a global flag consumed the service slot and the verb never matched), `gh api …/issues -f title=x` (gh switches to POST the moment a field flag appears — no `-X` spelling required), `GIT tag -d` (the one new entry without `/i`) | named value-taking aws globals are walked (unknown globals still err toward defer); field flags without an explicit GET register as a write; `/i` added — unlike `branch -D`, tag deletion has no case distinction to preserve |
+| D-2 | **false positives** of exactly the cry-wolf class 0.4.3 claimed closed: `echo "please truncate the file"` (pre-existing, then *pinned into the snapshot as correct*), `git commit -m "add FLUSHALL guard"` (newly shipped), `echo "git push"` (known since 0.4.2) | these matches now run against a string whose quoted spans are replaced by an inert placeholder word — a quoted command word is already unquoted into the normalized string, so `"truncate" -s 0 f` still asks; a placeholder rather than deletion, because erasing `-C "/repo"`'s value made the option pattern consume `push` as the value |
+
+Workflow-side findings from the same review (receipt-continuity warning fired
+only when zero checks were EVER re-run; the identity key erased comparison
+operators and normalized non-Korean CJK to the empty string; the published
+measurement was cited with two different value sets) are in the CHANGELOG —
+they are auditor defects, not gate bypasses.
 
 ### Open, by construction
 

@@ -18,6 +18,7 @@ module.exports = [
   'ls -la', 'git status', 'git diff', 'git log --oneline -10', 'npm test',
   'npm run build', 'npm ci', 'yarn install', 'pnpm install', 'cat README.md',
   'grep -rn "rm" .', 'grep -r "rm" .', 'echo hello', 'echo "rm -rf /"',
+  // asked until 0.4.4: the push pattern matched inside quoted argument text
   'echo "git push"', 'git commit -m "rm -rf fix"', 'git add -A',
   'git commit -m "feat: x"', 'git checkout -b feature/x', 'git checkout main',
   'git switch main', 'git switch -c topic', 'git fetch --all', 'git pull',
@@ -65,29 +66,29 @@ module.exports = [
   'timeout 5 "rm" -rf /d', 'git -C "/repo" "push" origin main',
   '("rm" -rf /d)', 'git push origin main # --dry-run',
   'git push -o -n origin main', 'git -c core.pager="less -n" push origin main',
-  'git push origin main && echo "--dry-run"', 'ln -sf /tmp/x scripts/hooks/y',
+  'git push origin main && echo "--dry-run"',
 
-  // ── A1: redirection before the command word ────────────────────────
+  // ── A1: redirection before the command word — must ask ─────────────
   '>/dev/null "rm" -rf /d', '2>/dev/null "rm" -rf /d', '<in.txt "rm" -rf /d',
   '> out.txt "rm" -rf /d', '>>log "rm" -rf /d', '2>&1 "rm" -rf /d',
   '>/dev/null git "push" origin main', '&>/dev/null "rm" -rf /d',
   'sudo >/dev/null "rm" -rf /d',
 
-  // ── A2: ANSI-C and $"" quoting ─────────────────────────────────────
+  // ── A2: ANSI-C and $"" quoting — must ask ──────────────────────────
   "$'rm' -rf /d", '$"rm" -rf /d', "$'git' push origin main",
   "sudo $'rm' -rf /d",
 
-  // ── A3: database code-string wrappers ──────────────────────────────
+  // ── A3: database code-string wrappers — must ask ───────────────────
   'psql -c "DROP DATABASE prod"', 'psql -c "drop database prod"',
-  'psql -f migrate.sql', 'mysql -e "DROP DATABASE prod"',
+  'mysql -e "DROP DATABASE prod"',
   'mysql --execute="DROP SCHEMA app"', 'sqlite3 db.sqlite "DROP TABLE t"',
   'mongosh --eval "db.dropDatabase()"', 'mongo --eval "db.dropDatabase()"',
   'redis-cli FLUSHALL', 'redis-cli FLUSHDB', 'psql -c "DROP SCHEMA public"',
 
-  // ── B: registry gaps ───────────────────────────────────────────────
+  // ── B: registry gaps — must ask ────────────────────────────────────
   'git checkout -- .', 'git checkout -- src/app.js', 'git checkout .',
   'git checkout -f main', 'git restore .', 'git restore src/app.js',
-  'git restore --staged file.txt', 'git restore --worktree .',
+  'git restore --worktree .',
   'git restore --source HEAD~1 .', 'git stash clear', 'git stash drop',
   'git stash drop stash@{1}', 'git reflog expire --expire=now --all',
   'git gc --prune=now', 'git gc --prune=all --aggressive',
@@ -117,20 +118,58 @@ module.exports = [
   'az group list', 'helm list', 'docker images', 'gh api /user',
   'git worktree list', 'git submodule update --init',
   'echo "git restore ."', 'grep -rn "git stash clear" docs/',
-  'npm publish --dry-run', 'cargo build', 'gem build mygem.gemspec',
+  // unstage-only: puts nothing back into the worktree, so it defers by the
+  // same rule the registry entry documents (moved here by the section audit —
+  // it sat in the "must ask" registry-gaps block while correctly pinned defer)
+  'git restore --staged file.txt',
+  'cargo build', 'gem build mygem.gemspec',
   'psql -c "create table t (id int)"', 'mysql -e "show tables"',
-  'git tag -l', 'git gc', 'git reflog', 'git checkout HEAD~1 -- ',
+  'git tag -l', 'git gc', 'git reflog',
+  // running a FILE of statements defers by design, like `bash deploy.sh` and
+  // `node script.js` — the 0.4.4 section audit moved it out of the A3 ask block
+  // where its placement contradicted its (correct) pin.
+  'psql -f migrate.sql',
 
   // ── 0.4.3 review — prose and value-position collisions (must stay defer) ──
   'git commit -m "truncate long lines"', 'git commit -m "drop database support"',
   'git commit -m "docs: drop index page"', 'echo "please truncate the file"',
   'az group show --name delete', 'gcloud compute instances list --filter delete',
   'grep -rn "dropDatabase()" src/', 'npm run deploy',
-  'git checkout ./subdir', 'git checkout .github/workflows',
-  'aws s3 ls delete-me-bucket', 'git switch main', 'git switch -c topic',
+  'aws s3 ls delete-me-bucket',
+  // This corpus runs with CWD outside the plugin root, where relative
+  // self-protection deliberately does not apply — so this pin is defer BY
+  // DESIGN. The cwd-inside-root ask is covered by the unit tests
+  // ("redirect into hooks.json", "sed -i on the gate script"). It sat in the
+  // "must stay ask" block above until the 0.4.4 review caught the mismatch.
+  'ln -sf /tmp/x scripts/hooks/y',
 
   // ── 0.4.3 review — kept or added asks ──────────────────────────────
   'psql -c "TRUNCATE users"', 'run-query "drop table users"',
   'git switch --discard-changes main', 'git switch -f main',
   'cargo yank --vers 1.0.0', 'gh pr close 4',
+  // deliberate asks, documented by the 0.4.4 section audit (both previously sat
+  // in a "must stay defer" block while pinned ask): npm has no parsed dry-run
+  // exemption — adding a parser for a rare spelling is weight the harness does
+  // not carry, and the error is toward asking; `checkout <ref> -- <paths>` is a
+  // destructive family, the empty-pathspec spelling is its error-adjacent corner.
+  'npm publish --dry-run', 'git checkout HEAD~1 -- ',
+
+  // ── 0.4.4 review — routes the adversarial pass proved open; must ask ──
+  '1>&2 "rm" -rf /d', '>&2 "rm" -rf /d', '&>>log "rm" -rf /d',
+  'git checkout main -f', 'git checkout main --force',
+  // pathspec checkouts (a ref cannot begin with `.`): these discard
+  // uncommitted edits under the path. Sat in "must stay defer" until 0.4.4.
+  'git checkout ./subdir', 'git checkout .github/workflows',
+  'GIT tag -d v1.0.0',
+  'aws --profile prod rds delete-db-instance --db-instance-identifier x',
+  'aws --region us-east-1 ec2 terminate-instances --instance-ids i-1',
+  'gh api /repos/o/r/issues -f title=x', 'gh api /repos/o/r/labels -F name=@f',
+  'echo FLUSHALL | redis-cli', 'echo "FLUSHALL" | redis-cli',
+
+  // ── 0.4.4 review — their benign neighbors must stay defer ──────────
+  'ls 2>&1', 'node app.js 2>&1 | tee log', 'git status 2>&1',
+  'git checkout feature/topic',
+  'git commit -m "add FLUSHALL guard"', 'echo "FLUSHALL"',
+  'aws --profile prod s3 ls', 'aws --no-paginate s3 ls',
+  'gh api -X GET /search/code -f q=x', 'gh api /repos/o/r --jq .name',
 ];

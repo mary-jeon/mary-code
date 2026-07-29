@@ -51,6 +51,42 @@ function judge(cmd) {
 const current = {};
 for (const c of cases) current[c] = judge(c);
 
+/* ── Section-intent audit ──────────────────────────────────────────────
+ * The snapshot pins the gate's ACTUAL output — regeneration turns whatever the
+ * gate says into "expected". The 0.4.3 release proved the failure mode: a
+ * working bypass (`2>&1 "rm"`) sat pinned as `defer` INSIDE the corpus section
+ * that existed to prove redirections were fixed, and 267/267 green was
+ * agreement with the bug. So the corpus section headers carry their intent
+ * ("must ask" / "must stay defer"), and a pin that contradicts the header of
+ * the block it sits in fails — in --update mode too. A case a header cannot
+ * cover does not belong in that section; move it, don't exempt it. */
+function sectionMismatches(decisions) {
+  const src = fs.readFileSync(path.join(__dirname, 'decisions.cases.js'), 'utf8');
+  const intentOf = h =>
+    /must (stay )?ask|asks\b/i.test(h) ? 'ask' :
+    /must stay defer|benign/i.test(h) ? 'defer' : null;
+  let intent = null;
+  const bad = [];
+  for (const line of src.split('\n')) {
+    const h = /\/\/ ── (.+?) ─*$/.exec(line.trim());
+    if (h) { intent = intentOf(h[1]); continue; }
+    for (const m of line.matchAll(/'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"/g)) {
+      const c = (m[1] !== undefined ? m[1] : m[2]).replace(/\\(.)/g, '$1');
+      if (!(c in decisions) || intent === null) continue;
+      const d = decisions[c] === 'defer' ? 'defer' : 'ask';
+      if (d !== intent) bad.push(`${c}\n      section says "${intent}", gate says ${decisions[c]}`);
+    }
+  }
+  return bad;
+}
+const sectionBad = sectionMismatches(current);
+if (sectionBad.length) {
+  console.error(`\n  SECTION INTENT VIOLATED (${sectionBad.length}) — a pin contradicts the corpus block it sits in:`);
+  for (const b of sectionBad) console.error(`    ${b}`);
+  console.error('\nFix the gate or move the case to a correctly-labeled section — do not --update over this.\n');
+  process.exit(1);
+}
+
 if (process.argv.includes('--update')) {
   fs.writeFileSync(SNAPSHOT, JSON.stringify(current, null, 1) + '\n');
   const asks = Object.values(current).filter(v => v.startsWith('ask')).length;

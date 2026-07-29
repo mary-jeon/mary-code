@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.3 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.4 · Experimental · Claude Code**
 >
 > **English** (canonical) · [한국어](./README.ko.md)
 
@@ -339,7 +339,7 @@ The plugin components must stay together.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.4.3 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
+**Current version: Rv.0 / plugin 0.4.4 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
 
 Working now:
 
@@ -363,8 +363,8 @@ Working now:
 - a published threat model ([`docs/threat-model.md`](docs/threat-model.md)) covering demonstrated-and-closed bypasses and the surfaces open by construction;
 - secret masking on stored ledger copies, plugin-root-anchored self-protection, a parsed (not string-matched) `--dry-run` exemption, and command-word quote normalization;
 - continuous integration (GitHub Actions, Node 20/22 on Linux and Windows, every matrix leg run to completion); and
-- 266 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
-- a 267-command decision snapshot (`tests/decisions.test.js`): every pinned judgment — `ask` with its category, or `defer` — fails CI if it moves in either direction, so a weakened decision can only ship through a deliberate snapshot regeneration whose diff shows exactly what moved.
+- 292 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
+- a 287-command decision snapshot (`tests/decisions.test.js`): every pinned judgment — `ask` with its category, or `defer` — fails CI if it moves in either direction, so a weakened decision can only ship through a deliberate snapshot regeneration whose diff shows exactly what moved; and a pin that contradicts its corpus section's declared intent ("must ask" / "must stay defer") fails even the regeneration — a snapshot pins the gate's actual output, so without this a regenerated snapshot pins the gate's bugs as expected behavior.
 
 In development:
 

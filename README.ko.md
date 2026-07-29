@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.3 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.4 · Experimental · Claude Code**
 >
 > [English](./README.md) (정본) · **한국어**
 >
@@ -468,7 +468,7 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 
 ## 개발 상태
 
-**현재 버전: Rv.0 / plugin 0.4.3 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
+**현재 버전: Rv.0 / plugin 0.4.4 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
 
 동작 중: 6단계 절차, Standard/Guarded 등급, 검증→반례→수정→재검증, 사용자 언어 자동 일치,
 다중 `_work` 기록, 실패 적립과 사용자 승인 승격, 비가역 게이트(래퍼 세탁 패턴 포함),
@@ -479,11 +479,13 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 명령어 자리 따옴표·리다이렉션 정규화, CI(GitHub Actions, Node 20/22 · Linux/Windows, 매트릭스 전 레그 완주),
 검증 영수증 회차 간 연속성 검산(재검 비율·통과→실패 뒤집힘·공통 항목 0),
 4-2 반례 축 로테이션(명세 부합 · 상태와 구조 · 경계와 회귀 · 운용), 정체 감지(2회차 연속 완료 조건
-0건 종결 시 중단·보고), 회귀 검사 266건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
+0건 종결 시 중단·보고), 회귀 검사 292건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
 `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`)가 승인을 **요구하지 않아야** 한다는
-음성 테스트군 포함 — 그리고 명령 267건의 **판정 스냅샷**(`tests/decisions.test.js`): 고정된
+음성 테스트군 포함 — 그리고 명령 287건의 **판정 스냅샷**(`tests/decisions.test.js`): 고정된
 판정(`ask`+분류 또는 `defer`)이 어느 방향으로든 움직이면 CI가 실패하므로, 판정 완화는 의도적
-스냅샷 재생성과 그 diff 검토를 거쳐야만 배포됩니다.
+스냅샷 재생성과 그 diff 검토를 거쳐야만 배포됩니다. 또한 핀이 자신이 놓인 코퍼스 구획의 선언된
+의도("must ask" / "must stay defer")와 모순되면 **재생성 모드에서도 실패**합니다 — 스냅샷은
+게이트의 실제 출력을 고정하므로, 이 감사가 없으면 재생성이 게이트의 버그를 정답으로 고정합니다.
 
 개발 중: **결정 재추적 엔진** — 명세 완료, 구현 진행 중.
 

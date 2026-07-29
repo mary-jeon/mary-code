@@ -145,11 +145,15 @@ function parseReceipts(text) {
 }
 
 /** Identity of a check across rounds. Punctuation, spacing, and case drift
- * between rounds, so only word characters count. The full string is kept —
- * truncating would merge two long checks that share a prefix, and a false
- * merge here becomes a false pass→fail warning. */
+ * between rounds, so they are dropped — but letters and digits of EVERY script
+ * are kept (an `[a-z0-9가-힣]` class normalized a Japanese or Chinese receipt
+ * to the empty string, and the whole file silently lost its continuity audit),
+ * and comparison operators are kept too: `mass > 500` and `mass < 500` are
+ * different checks, and merging them manufactures exactly the false pass→fail
+ * warning this normalization exists to prevent. The full string is kept —
+ * truncating would merge two long checks that share a prefix. */
 function checkKey(s) {
-  return String(s || '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+  return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}<>=≤≥≠]/gu, '');
 }
 
 /* ── Receipt continuity across rounds (SKILL 4-4) ─────────────────────
@@ -160,11 +164,12 @@ function checkKey(s) {
  *
  * Receipts are already machine-readable and already accumulate in the `_work`
  * file, so whether that actually happened is computable rather than remembered.
- * Measured on the author's own records when this was written: of 54 receipt
- * items across 5 rounds (design task) only 5 were ever re-run, and of 132 items
- * across 18 rounds (BOM task) only 14 — about 90 % of checks were performed
- * once and never again. A regression cannot appear in a check nobody repeats,
- * so "no failures recorded" was not evidence of no regression.
+ * Measured on the author's own records with this function (re-measured
+ * 2026-07-29, after the 0.4.4 identity-key fix, on two long-running tasks):
+ * of 30 receipt items across 3 rounds only 4 were ever re-run, and of 132
+ * items across 18 rounds only 14 — about 90 % of checks were performed once
+ * and never again. A regression cannot appear in a check nobody repeats, so
+ * "no failures recorded" was not evidence of no regression.
  *
  * What is reported:
  *  - a check that passed in an earlier round and failed in a later one is a
@@ -178,21 +183,34 @@ function receiptContinuity(receipts) {
   if (rounds.length < 2) return null;
   const seen = new Map();
   const flips = [];
+  const coldRounds = [];
   let carried = 0, total = 0;
   rounds.forEach((rc, i) => {
-    for (const c of rc.checks) {
-      total++;
-      const prev = seen.get(c.key);
+    // Within one round the same key is ONE check (its last state wins). An
+    // in-round duplicate that counted as "carried" let a single round satisfy
+    // the continuity test for the whole file without any round re-running
+    // anything — and produced "passed in receipt N fails in receipt N".
+    const byKey = new Map();
+    for (const c of rc.checks) byKey.set(c.key, c);
+    total += byKey.size;
+    let carriedHere = 0;
+    for (const [key, c] of byKey) {
+      const prev = seen.get(key);
       if (prev) {
-        carried++;
+        carried++; carriedHere++;
         if (prev.pass === true && c.pass === false) {
           flips.push({ from: prev.round + 1, to: i + 1, check: c.check });
         }
       }
-      seen.set(c.key, { round: i, pass: c.pass });
     }
+    // A round that re-ran nothing from any earlier round is where "the fix
+    // broke something that used to pass" has nowhere to appear — per round,
+    // not only when the whole file carried zero (R1{a} R2{b} R3{a} used to
+    // pass silently because R3 re-ran a check from R1).
+    if (i > 0 && carriedHere === 0) coldRounds.push(i + 1);
+    for (const [key, c] of byKey) seen.set(key, { round: i, pass: c.pass });
   });
-  return { rounds: rounds.length, total, carried, flips,
+  return { rounds: rounds.length, total, carried, flips, coldRounds,
            rate: total ? Math.round((carried / total) * 100) : 0 };
 }
 
@@ -292,6 +310,11 @@ function analyze({ faillog, works }) {
           `${w.file}: ${w.continuity.rounds} verification rounds and not one check from an ` +
           `earlier round was re-run in a later one. SKILL 4-4 requires re-running 4-1 after a ` +
           `fix; a regression cannot appear in a check nobody repeats.`);
+      } else if (w.continuity.coldRounds.length) {
+        report.warnings.push(
+          `${w.file}: receipt round(s) ${w.continuity.coldRounds.join(', ')} re-ran nothing ` +
+          `from any earlier round — whatever those rounds fixed, a regression had nowhere ` +
+          `to appear (SKILL 4-4).`);
       }
     }
   }

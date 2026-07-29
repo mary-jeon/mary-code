@@ -289,6 +289,57 @@ t("ANSI-C quoting after a wrapper", () =>
 t('a redirection in an ordinary command still defers', () =>
   assert.strictEqual(decide(bash('node app.js > out.log 2>&1')).decision, 'defer'));
 
+/* 0.4.4 — routes the post-release adversarial review proved open. The fd-dup
+ * shapes were reproduced before fixing: the gate deferred while bash executed
+ * the quoted command word (verified with `echo` substituted for `rm`) — the
+ * segment splitter treated the `&` of `2>&1` as a command separator, so the
+ * segment's command word became `1` and the walker never saw the redirection. */
+console.log('\n[0.4.4 review — fd-duplication routes, flag order, prose collisions]');
+t('2>&1 before a quoted command word', () =>
+  assert.strictEqual(decide(bash('2>&1 "rm" -rf /tmp/x')).decision, 'ask'));
+t('1>&2 before a quoted command word', () =>
+  assert.strictEqual(decide(bash('1>&2 "rm" -rf /tmp/x')).decision, 'ask'));
+t('>&2 before a quoted command word', () =>
+  assert.strictEqual(decide(bash('>&2 "rm" -rf /tmp/x')).decision, 'ask'));
+t('&>> before a quoted command word', () =>
+  assert.strictEqual(decide(bash('&>>log "rm" -rf /tmp/x')).decision, 'ask'));
+t('ordinary trailing 2>&1 still defers', () =>
+  assert.strictEqual(decide(bash('ls 2>&1')).decision, 'defer'));
+t('a background & still separates commands', () =>
+  assert.strictEqual(decide(bash('sleep 1 & "rm" -rf /tmp/x')).decision, 'ask'));
+t('checkout with the force flag after the ref', () =>
+  assert.strictEqual(decide(bash('git checkout main -f')).decision, 'ask'));
+t('checkout --force after the ref', () =>
+  assert.strictEqual(decide(bash('git checkout main --force')).decision, 'ask'));
+t('checkout of a dot pathspec discards edits under it', () =>
+  assert.strictEqual(decide(bash('git checkout ./subdir')).decision, 'ask'));
+t('checkout .github/… is a pathspec — a ref cannot begin with a dot', () =>
+  assert.strictEqual(decide(bash('git checkout .github/workflows')).decision, 'ask'));
+t('checkout of a branch with a slash stays defer', () =>
+  assert.strictEqual(decide(bash('git checkout feature/topic')).decision, 'defer'));
+t('tag -d asks regardless of command casing', () =>
+  assert.strictEqual(decide(bash('GIT tag -d v1')).decision, 'ask'));
+t('truncate in quoted prose stays an argument', () =>
+  assert.strictEqual(decide(bash('echo "please truncate the file"')).decision, 'defer'));
+t('a quoted truncate COMMAND word still asks', () =>
+  assert.strictEqual(decide(bash('"truncate" -s 0 data.db')).decision, 'ask'));
+t('FLUSHALL in a commit message stays an argument', () =>
+  assert.strictEqual(decide(bash('git commit -m "add FLUSHALL guard"')).decision, 'defer'));
+t('quoted FLUSHALL piped into a redis client asks', () =>
+  assert.strictEqual(decide(bash('echo "FLUSHALL" | redis-cli')).decision, 'ask'));
+t('git push inside quoted prose stays an argument', () =>
+  assert.strictEqual(decide(bash('echo "git push"')).decision, 'defer'));
+t('a quoted option value still occupies its value slot', () =>
+  assert.strictEqual(decide(bash('git -C "/repo" "push" origin main')).decision, 'ask'));
+t('aws global flags before the service', () =>
+  assert.strictEqual(decide(bash('aws --profile prod rds delete-db-instance --db-instance-identifier x')).decision, 'ask'));
+t('aws global flags before a read verb still defer', () =>
+  assert.strictEqual(decide(bash('aws --profile prod s3 ls')).decision, 'defer'));
+t('gh api with a field flag is an implicit POST', () =>
+  assert.strictEqual(decide(bash('gh api /repos/o/r/issues -f title=x')).decision, 'ask'));
+t('gh api -f with an explicit GET stays a read', () =>
+  assert.strictEqual(decide(bash('gh api -X GET /search/code -f q=x')).decision, 'defer'));
+
 console.log('\n[registry gaps — irreversible in practice, previously unregistered]');
 t('git checkout -- . discards uncommitted work', () =>
   assert.strictEqual(decide(bash('git checkout -- .')).decision, 'ask'));
