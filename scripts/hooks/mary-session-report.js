@@ -12,48 +12,44 @@
 
 'use strict';
 
-const { openApprovals } = require('./lib/ledger');
+const { openApprovalsDetailed } = require('./lib/ledger');
 
 const MAX_SHOWN = 5;
 
 function buildContext() {
-  let open;
-  try {
-    open = openApprovals();
-  } catch {
-    return null;
-  }
-  if (!open.length) return null;
+  let result;
+  try { result = openApprovalsDetailed(); }
+  catch { return '[mary] Approval ledger could not be inspected. Treat approval state as unknown.'; }
 
-  // Oldest first. The oldest unknown is the riskiest — it has had the longest
-  // time for its unobserved side effects to matter. Truncating from the head
-  // would hide exactly those first.
+  const { approvals: open, integrity } = result;
+  const integrityLines = [];
+  if (integrity.readError) integrityLines.push(`- ledger read error: ${integrity.readError}`);
+  if (integrity.parseErrors.length) {
+    integrityLines.push(`- ${integrity.parseErrors.length} malformed ledger line(s): ${integrity.parseErrors.map(e => e.line).join(', ')}`);
+  }
+  if (!open.length && !integrityLines.length) return null;
+
   const lines = open.slice(0, MAX_SHOWN).map(a => {
     const when = String(a.ts || '').replace('T', ' ').slice(0, 16);
-    const what = a.request && a.request.command
-      ? String(a.request.command).slice(0, 120)
-      : (a.request && (a.request.file_path || a.request.notebook_path)) || '(no content)';
-    return `- ${when} · ${a.tool || '?'} · ${a.category || 'uncategorized'}\n  ${what}\n  request_hash: ${a.request_hash}`;
+    const identity = a.tool_use_id ? `tool_use_id: ${a.tool_use_id}` : `request_hash: ${a.request_hash}`;
+    return `- ${when} · ${a.tool || '?'} · ${a.category || 'uncategorized'}\n  ${identity}`;
   });
-
   const more = open.length > MAX_SHOWN ? `\n(${open.length - MAX_SHOWN} more not shown)` : '';
 
   return [
-    `[mary] ${open.length} approval(s) have no recorded outcome.`,
+    integrityLines.length ? '[mary] WARNING: approval ledger integrity could not be established.' : null,
+    ...integrityLines,
+    integrityLines.length ? 'Do not interpret missing records as proof that no approval is open.' : null,
+    open.length ? `[mary] ${open.length} approval(s) have no recorded outcome.` : null,
     '',
     ...lines,
     more,
-    '',
-    'The state of these items is **unknown** — not failed; the outcome was never observed.',
-    '**Do not retry automatically.** The action may in fact have run.',
-    'First observe the real side effects to establish whether it ran, then report the result to the user.',
-    'Some of these may be approvals the user simply refused: a manual denial has',
-    'produced no closing record on any host observed so far, so a refusal looks',
-    'exactly like a lost outcome. Ask before assuming an action needs chasing down.',
-    'Once observed, close it so it stops re-appearing:',
-    '  node <plugin>/scripts/mary-reconcile.js <request_hash> --outcome ran|not-run|denied|superseded --evidence "<observation>"',
-    `Ledger: ~/.claude/mary/approvals.jsonl`,
-  ].filter(Boolean).join('\n');
+    open.length ? '' : null,
+    open.length ? 'The state of these items is **unknown** — not failed; the outcome was never observed.' : null,
+    open.length ? '**Do not retry automatically.** The action may in fact have run.' : null,
+    open.length ? 'First observe the real side effects, then reconcile by request hash using the local ledger.' : null,
+    'Ledger: ~/.claude/mary/approvals.jsonl',
+  ].filter(v => v !== null && v !== undefined).join('\n');
 }
 
 function main() {

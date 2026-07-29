@@ -12,9 +12,9 @@
  *     fail-open path ("hook died, let it pass").
  *
  *  2. Regexes are never the sole basis for approval. A pattern is only a signal that
- *     confirmation is needed; no pattern ever produces an automatic allow.
- *     A non-match is not "allow" — it is "defer": the decision returns to the host's
- *     normal permission flow.
+ *     confirmation is needed; no pattern ever produces an automatic allow. At the
+ *     process boundary a non-match emits no hook decision (exit 0 with empty stdout),
+ *     so Claude Code's normal permission flow remains authoritative.
  *
  *  3. No automatic-approval paths. No session cache, no timeout, no
  *     "second call passes". Remembering an answer to skip the next question is
@@ -26,13 +26,13 @@
  *     not complete — no string-level inspection reads full shell semantics. This is
  *     not a trust boundary; it makes an obvious bypass visible (see README).
  *
- *  5. Every "ask" is recorded in the ledger — the only record binding approval to
- *     execution (lib/ledger.js). A failed write to the ledger never changes the
- *     decision: the gate still asks.
+ *  5. Every "ask" attempts an append-only ledger record. If persistence fails, the
+ *     gate still asks and makes the unaudited state explicit in the dialog instead of
+ *     pretending that an approval/outcome binding exists.
  *
- * Output contract: exit 0 + stdout JSON.
- *   permissionDecision: "ask"   → show the user a permission dialog
- *                       "defer" → hand off to the host's normal permission flow
+ * Output contract:
+ *   recognized risk / malformed input → exit 0 + native `ask` JSON
+ *   no registered risk recognized     → exit 0 + no stdout (no hook decision)
  * exit 2 is never used. A hard block would take the choice away from the user.
  */
 
@@ -40,7 +40,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { requestHash, append, openApprovals, maskSecrets, maskDeep, MARY_DIR } = require('./lib/ledger');
+const { requestHash, append, openApprovalsDetailed, maskSecrets, compactRequest, normalizeCwd, MARY_DIR } = require('./lib/ledger');
 
 const HOOK_ID = 'mary:pre:irreversible-gate';
 
@@ -752,10 +752,14 @@ function withContextWarnings(v, payload) {
   let reason = v.reason;
   try {
     const sid = payload.session_id || null;
-    const cwd = payload.cwd ? String(payload.cwd).toLowerCase() : null;
+    const cwd = normalizeCwd(payload.cwd);
+    const ledgerState = openApprovalsDetailed();
+    if (ledgerState.integrity.readError || ledgerState.integrity.parseErrors.length) {
+      reason += '\n\n⚠ Mary could not establish approval-ledger integrity. Cross-session approval visibility may be incomplete; do not treat missing entries as proof of safety.';
+    }
     if (cwd) {
-      const others = openApprovals().filter(a =>
-        a.session && a.session !== sid && a.cwd && String(a.cwd).toLowerCase() === cwd);
+      const others = ledgerState.approvals.filter(a =>
+        a.session && a.session !== sid && normalizeCwd(a.cwd) === cwd);
       if (others.length) {
         reason += `\n\n⚠ ${others.length} unresolved approval(s) from other session(s) target this working directory. ` +
           `Their outcomes are unknown — the state you just reviewed may have changed. ` +
@@ -799,6 +803,10 @@ function emit(decision, reason) {
   process.exit(0);
 }
 
+function emitNoDecision() {
+  process.exit(0);
+}
+
 /* ── Entry point ────────────────────────────────────────────────── */
 
 function main() {
@@ -824,31 +832,32 @@ function main() {
     const v = decide(payload);
     if (v.decision === 'ask') v.reason = withContextWarnings(v, payload);
 
-    if (v.decision === 'ask') {
-      // Record the approval request in the ledger. The sentence a human saw
-      // (presented_text) and the machine-matching hash (request_hash) are stored
-      // separately — they serve different purposes.
-      // The STORED copies are secret-masked (the ledger is plaintext forever);
-      // the hash is computed over the raw input so approval→outcome matching is
-      // unaffected, and the dialog itself shows the unmasked original.
-      const maskedText = maskSecrets(v.reason);
-      const maskedInput = maskDeep(payload.tool_input || {});
-      const redacted = maskedText !== v.reason ||
-        JSON.stringify(maskedInput) !== JSON.stringify(payload.tool_input || {});
-      append({
-        event: 'asked',
-        session: payload.session_id || null,
-        cwd: payload.cwd || null,
-        tool: payload.tool_name || null,
-        category: v.category || null,
-        request_hash: requestHash(payload.tool_name, payload.tool_input),
-        presented_text: maskedText,
-        request: maskedInput,
-        ...(redacted ? { redacted: true } : {}),
-      });
+    if (v.decision !== 'ask') return emitNoDecision();
+
+    // Record the approval request in the ledger. The displayed sentence and the
+    // machine-matching identity serve different purposes. Stored request bodies
+    // are compacted so source content and edit strings do not become permanent logs.
+    const maskedText = maskSecrets(v.reason);
+    const storedInput = compactRequest(payload.tool_input || {});
+    const redacted = maskedText !== v.reason ||
+      JSON.stringify(storedInput) !== JSON.stringify(payload.tool_input || {});
+    const recorded = append({
+      event: 'asked',
+      session: payload.session_id || null,
+      cwd: normalizeCwd(payload.cwd),
+      tool: payload.tool_name || null,
+      tool_use_id: payload.tool_use_id || null,
+      category: v.category || null,
+      request_hash: requestHash(payload.tool_name, payload.tool_input),
+      presented_text: maskedText,
+      request: storedInput,
+      ...(redacted ? { redacted: true } : {}),
+    });
+    if (!recorded) {
+      v.reason += '\n\nWARNING: Mary could not write the approval ledger. This approval and its outcome will not be auditable.';
     }
 
-    emit(v.decision, v.reason);
+    emit('ask', v.reason);
   });
 }
 

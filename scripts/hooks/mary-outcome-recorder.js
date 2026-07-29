@@ -28,7 +28,7 @@
 
 'use strict';
 
-const { requestHash, append, openApprovals } = require('./lib/ledger');
+const { requestHash, append, openApprovals, normalizeCwd } = require('./lib/ledger');
 
 /* The response body is never stored. Command output can contain tokens and
  * credentials (L17 prompt-log-retention-leak), and the event field already says
@@ -39,10 +39,42 @@ function responseBytes(res) {
   return Buffer.byteLength(s, 'utf8');
 }
 
+const EVENT_MAP = new Map([
+  ['PostToolUse', 'succeeded'],
+  ['PostToolUseFailure', 'failed'],
+  ['PermissionDenied', 'denied'],
+]);
+
 function eventOf(hookEventName) {
-  if (hookEventName === 'PostToolUseFailure') return 'failed';
-  if (hookEventName === 'PermissionDenied') return 'denied';
-  return 'succeeded';
+  return EVENT_MAP.get(hookEventName) || null;
+}
+
+function recordOutcome(p, deps = {}) {
+  const appendRecord = deps.append || append;
+  const findOpen = deps.openApprovals || openApprovals;
+  const event = eventOf(p.hook_event_name);
+  if (!event) return { matched: false, recorded: false };
+
+  const hash = requestHash(p.tool_name, p.tool_input);
+  const cwd = normalizeCwd(p.cwd);
+  const isOpen = findOpen().some(a => {
+    if (p.tool_use_id && a.tool_use_id === p.tool_use_id) return true;
+    return !a.tool_use_id && hash && p.session_id && cwd &&
+      a.request_hash === hash && a.session === p.session_id &&
+      normalizeCwd(a.cwd) === cwd;
+  });
+  if (!isOpen) return { matched: false, recorded: false };
+
+  const recorded = appendRecord({
+    event,
+    session: p.session_id || null,
+    cwd,
+    tool: p.tool_name || null,
+    tool_use_id: p.tool_use_id || null,
+    request_hash: hash,
+    response_bytes: responseBytes(p.tool_response),
+  });
+  return { matched: true, recorded };
 }
 
 function main() {
@@ -52,25 +84,10 @@ function main() {
   process.stdin.on('error', () => process.exit(0));
   process.stdin.on('end', () => {
     try {
-      const p = JSON.parse(raw || '{}');
-      const hash = requestHash(p.tool_name, p.tool_input);
-
-      // No open asked entry → this call never went through the gate. Do not record.
-      // Session-aware: an outcome from this session must not close another
-      // session's still-unknown approval for the same command (the ledger fold
-      // applies the same rule when matching).
-      const isOpen = openApprovals().some(a => a.request_hash === hash &&
-        (!p.session_id || !a.session || a.session === p.session_id));
-      if (!isOpen) return process.exit(0);
-
-      append({
-        event: eventOf(p.hook_event_name),
-        session: p.session_id || null,
-        tool: p.tool_name || null,
-        tool_use_id: p.tool_use_id || null,
-        request_hash: hash,
-        response_bytes: responseBytes(p.tool_response),
-      });
+      const result = recordOutcome(JSON.parse(raw || '{}'));
+      if (result.matched && !result.recorded) {
+        process.stderr.write('[mary:post:outcome-recorder] Approval outcome could not be written to the ledger; it remains unknown.\n');
+      }
     } catch {
       /* a recording failure must not interfere with the work */
     }
@@ -81,3 +98,4 @@ function main() {
 process.on('uncaughtException', () => process.exit(0));
 
 if (require.main === module) main();
+module.exports = { eventOf, recordOutcome, responseBytes };

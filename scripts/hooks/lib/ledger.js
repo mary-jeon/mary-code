@@ -95,6 +95,32 @@ function maskDeep(v) {
   return v;
 }
 
+function normalizeCwd(cwd) {
+  if (!cwd) return null;
+  try { return path.resolve(String(cwd)); } catch { return String(cwd); }
+}
+
+function compactRequest(toolInput) {
+  const input = toolInput && typeof toolInput === 'object' ? toolInput : {};
+  const contentKeys = new Set(['content', 'old_string', 'new_string', 'cell_source', 'new_source']);
+  const walk = (value, key = '') => {
+    if (typeof value === 'string' && contentKeys.has(key)) {
+      return {
+        omitted: true,
+        bytes: Buffer.byteLength(value, 'utf8'),
+        sha256: crypto.createHash('sha256').update(value, 'utf8').digest('hex'),
+      };
+    }
+    if (Array.isArray(value)) return value.map(v => walk(v));
+    if (value && typeof value === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(value)) out[k] = walk(v, k);
+      return out;
+    }
+    return typeof value === 'string' ? maskSecrets(value) : value;
+  };
+  return walk(input);
+}
 /** Never throws. A failed write must not change a gate decision. */
 function append(record) {
   try {
@@ -106,59 +132,70 @@ function append(record) {
   }
 }
 
-function readAll() {
+function readLedger() {
+  const result = { records: [], readError: null, parseErrors: [] };
+  let text;
   try {
-    return fs.readFileSync(LEDGER, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map(l => { try { return JSON.parse(l); } catch { return null; } })
-      .filter(Boolean);
-  } catch {
-    return [];
+    text = fs.readFileSync(LEDGER, 'utf8');
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return result;
+    result.readError = error && error.message ? error.message : String(error);
+    return result;
   }
-}
-
-/**
- * Fold the log to find approvals that never received an outcome.
- *
- * Matching rules (each closes at most ONE open asked entry):
- *  - Chronological, floor at zero: a closing event only closes an asked entry
- *    that is already open at that point in the log. A surplus close is dropped,
- *    never banked — otherwise a stray extra outcome would silently pre-pay the
- *    NEXT time the same command is asked, and that approval could end unknown
- *    without ever being reported.
- *  - succeeded/failed/denied bind by hash AND session: an outcome observed in
- *    session B must not close session A's still-unknown approval for the same
- *    command. If the outcome has no session, or only session-less asked entries
- *    exist, it falls back to hash-only (old ledgers keep folding).
- *  - reconciled binds by hash only: a human observing side effects is not
- *    scoped to the session that asked.
- */
-function openApprovals() {
-  const entries = [];               // asked entries in file order
-  const byHash = new Map();         // hash -> asked entries (same order)
-  const CLOSERS = new Set(['succeeded', 'failed', 'denied', 'reconciled']);
-  for (const r of readAll()) {
-    if (r.event === 'asked') {
-      const e = { rec: r, closed: false };
-      entries.push(e);
-      if (!byHash.has(r.request_hash)) byHash.set(r.request_hash, []);
-      byHash.get(r.request_hash).push(e);
-    } else if (CLOSERS.has(r.event)) {
-      const q = byHash.get(r.request_hash);
-      if (!q) continue;
-      let target;
-      if (r.event !== 'reconciled' && r.session) {
-        target = q.find(e => !e.closed && e.rec.session === r.session)
-              || q.find(e => !e.closed && !e.rec.session);
-      } else {
-        target = q.find(e => !e.closed);
-      }
-      if (target) target.closed = true;
+  text.split('\n').forEach((line, index) => {
+    if (!line) return;
+    try { result.records.push(JSON.parse(line)); }
+    catch (error) {
+      result.parseErrors.push({ line: index + 1, error: error && error.message ? error.message : String(error) });
     }
-  }
-  return entries.filter(e => !e.closed).map(e => e.rec);
+  });
+  return result;
 }
 
-module.exports = { canonicalize, requestHash, append, readAll, openApprovals,
+function readAll() {
+  return readLedger().records;
+}
+
+/** Fold the log to find approvals that never received an outcome. */
+function openApprovalsDetailed() {
+  const { records, readError, parseErrors } = readLedger();
+  const entries = [];
+  const CLOSERS = new Set(['succeeded', 'failed', 'denied', 'reconciled']);
+
+  for (const r of records) {
+    if (r.event === 'asked') {
+      entries.push({ rec: r, closed: false });
+      continue;
+    }
+    if (!CLOSERS.has(r.event)) continue;
+
+    let target = null;
+    if (r.event === 'reconciled') {
+      target = entries.find(e => !e.closed && e.rec.request_hash === r.request_hash);
+    } else {
+      if (r.tool_use_id) {
+        target = entries.find(e => !e.closed && e.rec.tool_use_id === r.tool_use_id);
+      }
+      if (!target && r.request_hash && r.session && r.cwd) {
+        const cwd = normalizeCwd(r.cwd);
+        target = entries.find(e => !e.closed && !e.rec.tool_use_id &&
+          e.rec.request_hash === r.request_hash && e.rec.session === r.session &&
+          normalizeCwd(e.rec.cwd) === cwd);
+      }
+    }
+    if (target) target.closed = true;
+  }
+
+  return {
+    approvals: entries.filter(e => !e.closed).map(e => e.rec),
+    integrity: { readError, parseErrors },
+  };
+}
+
+function openApprovals() {
+  return openApprovalsDetailed().approvals;
+}
+
+module.exports = { canonicalize, requestHash, append, readAll, readLedger,
+  openApprovals, openApprovalsDetailed, normalizeCwd, compactRequest,
   maskSecrets, maskDeep, LEDGER, MARY_DIR };

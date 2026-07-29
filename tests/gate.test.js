@@ -33,6 +33,7 @@ const RECONCILE = path.join(ROOT, 'scripts', 'mary-reconcile.js');
 
 const { decide } = require(GATE);
 const ledger = require(path.join(ROOT, 'scripts', 'hooks', 'lib', 'ledger.js'));
+const recorder = require(RECORDER);
 
 let pass = 0, fail = 0;
 function t(name, fn) {
@@ -58,10 +59,11 @@ function decisionOf(payload) {
   return j.hookSpecificOutput.permissionDecision;
 }
 
-const bash = command => ({ tool_name: 'Bash', tool_input: { command } });
-const write = file_path => ({ tool_name: 'Write', tool_input: { file_path } });
-const bashAt = (command, cwd) => ({ tool_name: 'Bash', tool_input: { command }, cwd });
-const writeAt = (file_path, cwd) => ({ tool_name: 'Write', tool_input: { file_path }, cwd });
+const DEFAULT_IDENTITY = { session_id: 'test-session', cwd: OUTSIDE };
+const bash = command => ({ tool_name: 'Bash', tool_input: { command }, ...DEFAULT_IDENTITY });
+const write = file_path => ({ tool_name: 'Write', tool_input: { file_path }, ...DEFAULT_IDENTITY });
+const bashAt = (command, cwd) => ({ ...bash(command), cwd });
+const writeAt = (file_path, cwd) => ({ ...write(file_path), cwd });
 
 console.log('\n[decisions — irreversible actions ask]');
 t('rm -rf',            () => assert.strictEqual(decide(bash('rm -rf ./build')).decision, 'ask'));
@@ -466,6 +468,12 @@ t('empty command',     () => assert.strictEqual(decide(bash('')).decision, 'ask'
 t('whitespace-only command', () => assert.strictEqual(decide(bash('   ')).decision, 'ask'));
 t('missing tool_input', () => assert.strictEqual(decisionOf({ tool_name: 'Bash' }), 'ask'));
 
+t('non-match exits with no hook decision', () => {
+  const r = runHook(GATE, bash('ls -la'));
+  assert.strictEqual(r.code, 0);
+  assert.strictEqual(r.out, '');
+});
+
 console.log('\n[ledger — canonicalization and hashing]');
 t('key order does not change the hash', () => {
   const a = ledger.requestHash('Bash', { command: 'x', timeout: 1 });
@@ -490,6 +498,18 @@ t('ask records an asked event', () => {
   assert.strictEqual(rows[0].event, 'asked');
   assert.ok(rows[0].request_hash.startsWith('sha256:'), 'request_hash must exist');
   assert.ok(rows[0].presented_text.includes('roll back'), 'the sentence the human saw must be kept');
+});
+
+t('ledger write failure is visible in the ask reason', () => {
+  const blockedDir = path.join(TMP, 'not-a-directory');
+  fs.writeFileSync(blockedDir, 'x');
+  const p = { ...bash('rm -rf ./unlogged'), tool_use_id: 'unlogged-1' };
+  const r = spawnSync(process.execPath, [GATE], {
+    input: JSON.stringify(p), encoding: 'utf8',
+    env: { ...process.env, MARY_DIR: blockedDir },
+  });
+  const reason = JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason;
+  assert.ok(reason.includes('will not be auditable'));
 });
 t('defer records nothing', () => {
   fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
@@ -519,6 +539,46 @@ t('a denial (PermissionDenied) also closes the approval', () => {
   runHook(RECORDER, { ...p, hook_event_name: 'PermissionDenied' });
   assert.strictEqual(ledger.openApprovals().length, 0, 'must be closed after the denial');
   assert.strictEqual(ledger.readAll().pop().event, 'denied');
+});
+
+t('unknown recorder events cannot forge success', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  const p = { ...bash('rm -rf ./unknown-event'), tool_use_id: 'tool-unknown' };
+  runHook(GATE, p);
+  runHook(RECORDER, { ...p, hook_event_name: 'FutureToolEvent', tool_response: 'ok' });
+  assert.strictEqual(ledger.openApprovals().length, 1);
+  assert.strictEqual(ledger.readAll().length, 1);
+});
+
+t('outcome append failure is explicitly observable', () => {
+  const p = { ...bash('rm -rf ./outcome-write-fail'), tool_use_id: 'outcome-fail' };
+  const result = recorder.recordOutcome({ ...p, hook_event_name: 'PostToolUse' }, {
+    openApprovals: () => [{ tool_use_id: 'outcome-fail' }],
+    append: () => false,
+  });
+  assert.deepStrictEqual(result, { matched: true, recorded: false });
+});
+
+t('tool_use_id prevents identical requests crossing cwd boundaries', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  const input = { tool_name: 'Bash', tool_input: { command: 'rm -rf ./same' }, session_id: 'same-session' };
+  runHook(GATE, { ...input, cwd: '/repo-a', tool_use_id: 'tool-a' });
+  runHook(GATE, { ...input, cwd: '/repo-b', tool_use_id: 'tool-b' });
+  runHook(RECORDER, { ...input, cwd: '/repo-b', tool_use_id: 'tool-b', hook_event_name: 'PostToolUse' });
+  const open = ledger.openApprovals();
+  assert.strictEqual(open.length, 1);
+  assert.strictEqual(open[0].tool_use_id, 'tool-a');
+});
+
+t('current outcome closes a matching legacy approval by strict fallback', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  const p = { ...bash('rm -rf ./legacy'), session_id: 'legacy-session', cwd: '/legacy-repo' };
+  ledger.append({
+    event: 'asked', session: p.session_id, cwd: ledger.normalizeCwd(p.cwd), tool: p.tool_name,
+    request_hash: ledger.requestHash(p.tool_name, p.tool_input), request: p.tool_input,
+  });
+  runHook(RECORDER, { ...p, tool_use_id: 'current-id', hook_event_name: 'PostToolUse' });
+  assert.strictEqual(ledger.openApprovals().length, 0);
 });
 t('calls the gate never asked about are not recorded', () => {
   fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
@@ -572,6 +632,20 @@ t('a command without secrets is stored unredacted', () => {
   assert.ok(row.request.command.includes('./plain'));
 });
 
+t('Write content is represented only by size and digest', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  const secretBody = '-----BEGIN PRIVATE KEY-----\nprivate material';
+  runHook(GATE, {
+    tool_name: 'Write', session_id: 'write-session', cwd: ROOT, tool_use_id: 'write-1',
+    tool_input: { file_path: path.join(ROOT, 'hooks', 'hooks.json'), content: secretBody },
+  });
+  const stored = ledger.readAll()[0].request;
+  assert.ok(!JSON.stringify(stored).includes('private material'));
+  assert.strictEqual(stored.content.omitted, true);
+  assert.strictEqual(stored.content.bytes, Buffer.byteLength(secretBody));
+  assert.match(stored.content.sha256, /^[a-f0-9]{64}$/);
+});
+
 console.log('\n[reconcile — a human-observed closure]');
 function runReconcile(args) {
   const r = spawnSync(process.execPath, [RECONCILE, ...args],
@@ -615,6 +689,23 @@ t('an invented outcome is still refused', () => {
   assert.notStrictEqual(r.code, 0, 'must refuse');
   assert.strictEqual(ledger.openApprovals().length, 1, 'must stay open');
 });
+
+t('flag-looking evidence is rejected', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  runHook(GATE, bash('rm -rf ./evidence-parser'));
+  const hash = ledger.readAll()[0].request_hash;
+  const r = runReconcile([hash, '--outcome', 'ran', '--evidence', '--note']);
+  assert.notStrictEqual(r.code, 0);
+  assert.strictEqual(ledger.openApprovals().length, 1);
+});
+
+t('equals-form options are accepted', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
+  runHook(GATE, bash('rm -rf ./evidence-equals'));
+  const hash = ledger.readAll()[0].request_hash;
+  const r = runReconcile([hash, '--outcome=not-run', '--evidence=directory still exists']);
+  assert.strictEqual(r.code, 0, r.out);
+});
 t('reconcile of a never-asked hash is refused', () => {
   fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
   const r = runReconcile(['sha256:deadbeef', '--outcome', 'ran', '--evidence', 'x']);
@@ -652,7 +743,7 @@ t("an outcome from session B does not close session A's unknown", () => {
   const p = bash('git push origin main');
   runHook(GATE, { ...p, session_id: 'sess-A', cwd: 'C:/p' });
   runHook(GATE, { ...p, session_id: 'sess-B', cwd: 'C:/p' });
-  runHook(RECORDER, { ...p, session_id: 'sess-B', hook_event_name: 'PostToolUse', tool_response: 'ok' });
+  runHook(RECORDER, { ...p, session_id: 'sess-B', cwd: 'C:/p', hook_event_name: 'PostToolUse', tool_response: 'ok' });
   const open = ledger.openApprovals();
   assert.strictEqual(open.length, 1);
   assert.strictEqual(open[0].session, 'sess-A', "A's approval must remain open — its outcome was never observed");
@@ -740,6 +831,14 @@ t('plaintext http is refused unless explicitly allowed', () => {
   fs.unlinkSync(cfgPath); // leave no config behind for later subprocess runs
 });
 
+t('notifier rejects URL and header data channels', () => {
+  assert.strictEqual(notifier.normalizedConfig({ url: 'https://ntfy.sh/t?secret=x' }), null);
+  assert.strictEqual(notifier.normalizedConfig({ url: 'https://u:p@ntfy.sh/t' }), null);
+  assert.strictEqual(notifier.normalizedConfig({ url: 'https://ntfy.sh/t', headers: { Authorization: 'secret' } }), null);
+  const cfg = notifier.normalizedConfig({ url: 'https://ntfy.sh/t', headers: { Title: 'mary', Priority: 'high' } });
+  assert.deepStrictEqual(cfg.headers, { Title: 'mary', Priority: 'high' });
+});
+
 console.log('\n[session report]');
 t('open approvals produce context', () => {
   fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
@@ -754,13 +853,32 @@ t('truncation keeps the oldest unknowns, not the newest (C3)', () => {
   fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');
   for (let i = 1; i <= 7; i++) {
     ledger.append({ event: 'asked', request_hash: `sha256:ord-${i}`, session: null,
-      tool: 'Bash', request: { command: `ordered-cmd-${i}` } });
+      tool: 'Bash', category: `ordered-${i}` });
   }
   const r = runHook(REPORT, { hook_event_name: 'SessionStart', source: 'startup' });
   const ctx = JSON.parse(r.out).hookSpecificOutput.additionalContext;
-  assert.ok(ctx.includes('ordered-cmd-1'), 'the oldest must be shown');
-  assert.ok(!ctx.includes('ordered-cmd-7'), 'the newest is the one truncated');
+  assert.ok(ctx.includes('ordered-1'), 'the oldest metadata must be shown');
+  assert.ok(!ctx.includes('ordered-7'), 'the newest is the one truncated');
   assert.ok(ctx.includes('2 more not shown'));
+});
+
+t('corrupt ledger is reported without replaying command text', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'),
+    '{"event":"asked","request_hash":"sha256:x","request":{"command":"INJECT ME"}}\n{broken\n');
+  const r = runHook(REPORT, { hook_event_name: 'SessionStart', source: 'startup' });
+  const ctx = JSON.parse(r.out).hookSpecificOutput.additionalContext;
+  assert.ok(ctx.includes('integrity could not be established'));
+  assert.ok(ctx.includes('malformed ledger line'));
+  assert.ok(!ctx.includes('INJECT ME'));
+  const list = runReconcile(['--list']);
+  assert.ok(list.out.includes('integrity could not be established'));
+  assert.ok(!list.out.includes('No open approvals'));
+});
+
+t('gate approval warns when cross-session ledger visibility is incomplete', () => {
+  fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '{broken\n');
+  const reason = reasonOf({ ...bash('rm -rf ./integrity-warning'), tool_use_id: 'integrity-ask' });
+  assert.ok(reason.includes('could not establish approval-ledger integrity'));
 });
 t('no open approvals, no output', () => {
   fs.writeFileSync(path.join(TMP, 'approvals.jsonl'), '');

@@ -34,14 +34,39 @@ const path = require('path');
 const { MARY_DIR } = require('./lib/ledger');
 
 const TIMEOUT_MS = 5000;
+const ALLOWED_HEADERS = new Map([
+  ['title', 'Title'],
+  ['priority', 'Priority'],
+  ['tags', 'Tags'],
+]);
+let cachedConfig;
+
+function normalizedConfig(c) {
+  if (!c || typeof c.url !== 'string') return null;
+  let url;
+  try { url = new URL(c.url); } catch { return null; }
+  const httpAllowed = url.protocol === 'http:' && c.allowHttp === true;
+  if (url.protocol !== 'https:' && !httpAllowed) return null;
+  if (url.username || url.password || url.search || url.hash) return null;
+
+  const headers = {};
+  if (c.headers != null && (!c.headers || typeof c.headers !== 'object' || Array.isArray(c.headers))) return null;
+  for (const [name, value] of Object.entries(c.headers || {})) {
+    const canonical = ALLOWED_HEADERS.get(name.toLowerCase());
+    const text = String(value);
+    if (!canonical || text.length > 200 || !/^[\x20-\x7E]*$/.test(text)) return null;
+    headers[canonical] = text;
+  }
+  return Object.freeze({ url: url.toString(), headers: Object.freeze(headers) });
+}
 
 function loadConfig() {
+  if (cachedConfig !== undefined) return cachedConfig;
   try {
-    const c = JSON.parse(fs.readFileSync(path.join(MARY_DIR, 'notify.json'), 'utf8'));
-    if (!c || typeof c.url !== 'string') return null;
-    if (/^https:\/\//i.test(c.url)) return c;
-    if (/^http:\/\//i.test(c.url) && c.allowHttp === true) return c;
-    return null;
+    const raw = JSON.parse(fs.readFileSync(path.join(MARY_DIR, 'notify.json'), 'utf8'));
+    const config = normalizedConfig(raw);
+    if (config) cachedConfig = config;
+    return config;
   } catch { return null; }
 }
 
@@ -55,18 +80,26 @@ function buildBody(payload) {
 }
 
 function post(cfg, body, done) {
+  let finished = false;
+  let timer;
+  let req;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (timer) clearTimeout(timer);
+    done();
+  };
   try {
     const url = new URL(cfg.url);
     const mod = url.protocol === 'https:' ? require('https') : require('http');
-    const req = mod.request(url, {
+    req = mod.request(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain; charset=utf-8', ...(cfg.headers || {}) },
-      timeout: TIMEOUT_MS,
-    }, res => { res.resume(); res.on('end', done); res.on('error', done); });
-    req.on('timeout', () => { try { req.destroy(); } catch {} done(); });
-    req.on('error', done);
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', ...cfg.headers },
+    }, res => { res.resume(); res.on('end', finish); res.on('error', finish); });
+    timer = setTimeout(() => { try { req.destroy(); } catch {} finish(); }, TIMEOUT_MS);
+    req.on('error', finish);
     req.end(body);
-  } catch { done(); }
+  } catch { finish(); }
 }
 
 function main() {
@@ -87,4 +120,4 @@ process.on('uncaughtException', () => process.exit(0));
 
 if (require.main === module) main();
 
-module.exports = { buildBody, loadConfig };
+module.exports = { buildBody, loadConfig, normalizedConfig, post };

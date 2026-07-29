@@ -25,7 +25,7 @@
 
 'use strict';
 
-const { append, openApprovals } = require('./hooks/lib/ledger');
+const { append, openApprovalsDetailed } = require('./hooks/lib/ledger');
 
 /* `denied` exists because the host does not reliably tell us about a refusal.
  * The `PermissionDenied` event fires for auto-mode classifier denials; a person
@@ -38,29 +38,52 @@ const OUTCOMES = new Set(['ran', 'not-run', 'denied', 'superseded']);
 
 function parseArgs(argv) {
   const args = { _: [] };
+  const valueOptions = new Set(['outcome', 'evidence', 'note']);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--list') args.list = true;
-    else if (a === '--outcome' || a === '--evidence' || a === '--note') {
-      args[a.slice(2)] = argv[++i];
-    } else args._.push(a);
+    if (a === '--list') { args.list = true; continue; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const key = a.slice(2, eq < 0 ? undefined : eq);
+      if (!valueOptions.has(key)) throw new Error(`Unknown option: --${key}`);
+      const value = eq >= 0 ? a.slice(eq + 1) : argv[++i];
+      if (value === undefined || value === '' || String(value).startsWith('--')) {
+        throw new Error(`Missing value for --${key}`);
+      }
+      args[key] = value;
+      continue;
+    }
+    args._.push(a);
   }
+  if (args._.length > 1) throw new Error('Unexpected extra positional arguments.');
   return args;
 }
 
 function fmt(a) {
   const when = String(a.ts || '').replace('T', ' ').slice(0, 16);
-  const what = a.request && a.request.command
-    ? String(a.request.command).slice(0, 100)
-    : (a.request && (a.request.file_path || a.request.notebook_path)) || '(no content)';
-  return `- ${when} · ${a.tool || '?'} · ${a.category || 'uncategorized'} · ${a.request_hash}\n    ${what}`;
+  const identity = a.tool_use_id ? `tool_use_id=${a.tool_use_id}` : `request_hash=${a.request_hash}`;
+  return `- ${when} · ${a.tool || '?'} · ${a.category || 'uncategorized'} · ${identity}`;
 }
 
 function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const open = openApprovals();
+  let args;
+  try { args = parseArgs(process.argv.slice(2)); }
+  catch (error) { console.error(error.message); process.exit(1); }
+  const result = openApprovalsDetailed();
+  const open = result.approvals;
+  const integrity = result.integrity;
 
+  if (integrity.readError || integrity.parseErrors.length) {
+    console.error('WARNING: Approval ledger integrity could not be established.');
+    if (integrity.readError) console.error(`Read error: ${integrity.readError}`);
+    if (integrity.parseErrors.length) console.error(`Malformed line(s): ${integrity.parseErrors.map(e => e.line).join(', ')}`);
+    if (!args.list) process.exit(1);
+  }
   if (args.list || args._.length === 0) {
+    if (integrity.readError || integrity.parseErrors.length) {
+      console.log('Open-approval count is incomplete because the ledger is unreadable or corrupt.');
+      if (!open.length) return;
+    }
     if (!open.length) { console.log('No open approvals. Nothing to reconcile.'); return; }
     // Reading the ledger is itself recorded in the ledger: invoking this CLI is
     // a gated action, so its own `asked` entry is appended BEFORE the command
