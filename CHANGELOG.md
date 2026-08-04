@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.4.5 — 2026-08-05
+
+Quieter by default. The install cost that made users disable everything — losing
+the gate with it — is gone from the default path, and the ledger identity
+hardening contributed in PR #6 ships released.
 
 - Hook registration is now tiered, and the default is **gate-only**: the plugin's
   `hooks/hooks.json` registers only the `PreToolUse` irreversible-action gate. The
@@ -16,6 +20,9 @@
   the gate) is deliberately not offered — it would reopen the bypass class the
   gate's parsing exists to close.
 
+- `normalizeCwd` folds case on Windows only: win32 filesystems are case-insensitive,
+  so `C:\Repo` vs `c:\repo` no longer drops cross-session warnings or legacy outcome
+  matches. POSIX paths stay case-sensitive. (Found in post-merge review of PR #6.)
 - Non-matching gate calls now emit no hook decision instead of `defer`; malformed or unjudgeable inputs still ask.
 - Approval outcomes bind by `tool_use_id`, with normalized cwd/session/hash used only for strict legacy fallback.
 - Ledger read, parse, and append failures are visible instead of being reported as an empty or fully audited ledger.

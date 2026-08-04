@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.4 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.5 · Experimental · Claude Code**
 >
 > **English** (canonical) · [한국어](./README.ko.md)
 
@@ -12,7 +12,7 @@ Mary does not change the model. It changes how work is framed, executed, checked
 
 ## What is in Rv.0
 
-Rv.0 is the first public release of Mary as a Claude Code plugin: a workflow skill plus an execution layer that enforces part of the workflow with hooks.
+Rv.0 is Mary's public line as a Claude Code plugin: a workflow skill plus an execution layer that enforces part of the workflow with hooks. Since 0.4.5 the plugin is **gate-first**: the only hook it registers by default is the `PreToolUse` irreversible-action gate — quiet prevention on every call, with observability as an explicit choice (see "Hook tiers").
 
 - A `PreToolUse` gate asks for permission before recognized irreversible shell actions run. **This is the only hook the plugin registers by default** — see "Hook tiers" below.
 - Full tier only: `PostToolUse` and `PostToolUseFailure` hooks connect an approval request to the observed execution result.
@@ -135,7 +135,7 @@ Mary has two protection layers, and they are not the same thing:
 
 The gate's job is **routing to a human, not classification.** No pattern set reads full shell semantics, so the goal is not "recognize every dangerous command" — it is impossible. The goal is: route recognized risk, and everything the gate cannot judge, to the person; and never let a pattern produce an automatic allow. The actual defense line is the human approval button, which no encoding trick can pattern-match its way past — the patterns only decide when a human has to look.
 
-The Rv.0 hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
+The gate hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
 
 - file deletion, including non-recursive and path-prefixed forms (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`);
 - `git push` (with global options such as `-C` and quoted values such as `-c core.pager="less -n"` tolerated). The `--dry-run` exemption is **parsed, not string-matched**: it counts only when the flag is a real argument of that `push`, in that command segment — a commented-out flag, a `-n` that is the value of `--push-option`, or one borrowed from a config value does not buy it. Also destructive Git reset/clean operations, forced branch deletion, and `--no-verify` bypasses;
@@ -354,7 +354,7 @@ The plugin components must stay together.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.4.4 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
+**Current version: Rv.0 / plugin 0.4.5 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
 
 Working now:
 
@@ -378,7 +378,7 @@ Working now:
 - a published threat model ([`docs/threat-model.md`](docs/threat-model.md)) covering demonstrated-and-closed bypasses and the surfaces open by construction;
 - secret masking on stored ledger copies, plugin-root-anchored self-protection, a parsed (not string-matched) `--dry-run` exemption, and command-word quote normalization;
 - continuous integration (GitHub Actions, Node 20/22 on Linux and Windows, every matrix leg run to completion); and
-- 292 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
+- 305 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
 - a 287-command decision snapshot (`tests/decisions.test.js`): every pinned judgment — `ask` with its category, or `defer` — fails CI if it moves in either direction, so a weakened decision can only ship through a deliberate snapshot regeneration whose diff shows exactly what moved; and a pin that contradicts its corpus section's declared intent ("must ask" / "must stay defer") fails even the regeneration — a snapshot pins the gate's actual output, so without this a regenerated snapshot pins the gate's bugs as expected behavior.
 
 In development:

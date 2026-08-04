@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.4 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.5 · Experimental · Claude Code**
 >
 > [English](./README.md) (정본) · **한국어**
 >
@@ -16,7 +16,9 @@ Mary는 모델을 바꾸지 않습니다. 일이 정의되고, 실행되고, 검
 
 ## Rv.0에 들어 있는 것
 
-Rv.0은 Mary의 첫 공개 릴리스입니다: 워크플로 스킬 + 그 일부를 훅으로 집행하는 실행층.
+Rv.0은 Mary의 공개 라인입니다: 워크플로 스킬 + 그 일부를 훅으로 집행하는 실행층. 0.4.5부터
+플러그인은 **게이트 우선**입니다 — 기본으로 등록되는 훅은 `PreToolUse` 비가역 행동 게이트
+하나뿐이고(매 호출 조용한 방지), 관측은 명시적 선택입니다("훅 티어" 참조).
 
 - `PreToolUse` 게이트가 인식된 비가역 셸 행동 앞에서 승인을 요청합니다. **플러그인이 기본으로
   등록하는 훅은 이것 하나입니다** — 아래 "훅 티어" 참조.
@@ -154,7 +156,7 @@ Mary의 보호층은 둘이고, 서로 다릅니다:
 않는 것입니다. 실제 방어선은 사람이 누르는 승인 버튼이고, 그것은 패턴 기반이 아니라서
 인코딩 우회가 통하지 않습니다 — 패턴은 언제 사람이 봐야 하는지를 정할 뿐입니다.
 
-Rv.0 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며 다음을 인식하면 승인을 요청합니다:
+게이트 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며 다음을 인식하면 승인을 요청합니다:
 
 - 파일 삭제 — 비재귀·경로 접두 포함 (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`)
 - `git push`(`-C` 같은 전역 옵션과 `-c core.pager="less -n"` 같은 따옴표 값 허용).
@@ -491,7 +493,7 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 
 ## 개발 상태
 
-**현재 버전: Rv.0 / plugin 0.4.4 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
+**현재 버전: Rv.0 / plugin 0.4.5 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
 
 동작 중: 6단계 절차, Standard/Guarded 등급, 검증→반례→수정→재검증, 사용자 언어 자동 일치,
 다중 `_work` 기록, 실패 적립과 사용자 승인 승격, 비가역 게이트(래퍼 세탁 패턴 포함),
@@ -502,7 +504,7 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 명령어 자리 따옴표·리다이렉션 정규화, CI(GitHub Actions, Node 20/22 · Linux/Windows, 매트릭스 전 레그 완주),
 검증 영수증 회차 간 연속성 검산(재검 비율·통과→실패 뒤집힘·공통 항목 0),
 4-2 반례 축 로테이션(명세 부합 · 상태와 구조 · 경계와 회귀 · 운용), 정체 감지(2회차 연속 완료 조건
-0건 종결 시 중단·보고), 회귀 검사 292건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
+0건 종결 시 중단·보고), 회귀 검사 305건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
 `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`)가 승인을 **요구하지 않아야** 한다는
 음성 테스트군 포함 — 그리고 명령 287건의 **판정 스냅샷**(`tests/decisions.test.js`): 고정된
 판정(`ask`+분류 또는 `defer`)이 어느 방향으로든 움직이면 CI가 실패하므로, 판정 완화는 의도적
