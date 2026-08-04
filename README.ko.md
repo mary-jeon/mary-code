@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.4 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.5 · Experimental · Claude Code**
 >
 > [English](./README.md) (정본) · **한국어**
 >
@@ -16,13 +16,16 @@ Mary는 모델을 바꾸지 않습니다. 일이 정의되고, 실행되고, 검
 
 ## Rv.0에 들어 있는 것
 
-Rv.0은 Mary의 첫 공개 릴리스입니다: 워크플로 스킬 + 그 일부를 훅으로 집행하는 실행층.
+Rv.0은 Mary의 공개 라인입니다: 워크플로 스킬 + 그 일부를 훅으로 집행하는 실행층. 0.4.5부터
+플러그인은 **게이트 우선**입니다 — 기본으로 등록되는 훅은 `PreToolUse` 비가역 행동 게이트
+하나뿐이고(매 호출 조용한 방지), 관측은 명시적 선택입니다("훅 티어" 참조).
 
-- `PreToolUse` 게이트가 인식된 비가역 셸 행동 앞에서 승인을 요청합니다.
-- `PostToolUse` / `PostToolUseFailure` 훅이 승인 요청을 관측된 실행 결과와 결속합니다.
-- `PermissionDenied` 훅이 호스트가 거부를 보고하면 승인을 `denied`로 닫습니다.
-- `SessionStart` 훅이 결과가 기록되지 않은 승인을 `unknown`으로 보고합니다 — 실패로 간주하거나
-  자동 재시도하지 않습니다.
+- `PreToolUse` 게이트가 인식된 비가역 셸 행동 앞에서 승인을 요청합니다. **플러그인이 기본으로
+  등록하는 훅은 이것 하나입니다** — 아래 "훅 티어" 참조.
+- full 티어 한정: `PostToolUse` / `PostToolUseFailure` 훅이 승인 요청을 관측된 실행 결과와 결속합니다.
+- full 티어 한정: `PermissionDenied` 훅이 호스트가 거부를 보고하면 승인을 `denied`로 닫습니다.
+- full 티어 한정: `SessionStart` 훅이 결과가 기록되지 않은 승인을 `unknown`으로 보고합니다 —
+  실패로 간주하거나 자동 재시도하지 않습니다.
 - 덧붙이기 전용 승인 원장은 시크릿 마스킹 설명, 본문을 제외한 요청 메타데이터, 호스트 `tool_use_id`,
   무결성·레거시 fallback용 원본 입력 해시, 관측 결과를 저장합니다. Write/Edit/Notebook 본문과 도구 응답 본문은 저장하지 않습니다.
 - 동봉된 읽기 전용 `mary-critic` 에이전트가 반례 검토 단계에 고정된 도구 제한 프로필을 제공합니다.
@@ -153,7 +156,7 @@ Mary의 보호층은 둘이고, 서로 다릅니다:
 않는 것입니다. 실제 방어선은 사람이 누르는 승인 버튼이고, 그것은 패턴 기반이 아니라서
 인코딩 우회가 통하지 않습니다 — 패턴은 언제 사람이 봐야 하는지를 정할 뿐입니다.
 
-Rv.0 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며 다음을 인식하면 승인을 요청합니다:
+게이트 훅은 `Bash`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`에 등록되며 다음을 인식하면 승인을 요청합니다:
 
 - 파일 삭제 — 비재귀·경로 접두 포함 (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`)
 - `git push`(`-C` 같은 전역 옵션과 `-c core.pager="less -n"` 같은 따옴표 값 허용).
@@ -237,6 +240,33 @@ Bash 명령은 승인이 아니라 `ask`를 냅니다. 이것이 보편적 기�
   없으므로, 감지한다고 주장하지 않습니다.
 
 두 경고 모두 가시성일 뿐입니다: 결정을 바꾸지 않고, 차단하지 않고, 자동 거부하지 않습니다.
+trifecta 경고는 센티널이 등록된 **full 티어**(다음 절)에서만 동작합니다 — 기본 gate 티어에서는
+마커가 기록되지 않으므로 경고도 나타나지 않습니다.
+
+### 훅 티어 — 기본은 방지, 관측은 선택
+
+Mary의 훅 스크립트 다섯 중 무언가를 **막는** 것은 `PreToolUse` 게이트 하나뿐입니다. 나머지 넷 —
+결과 기록기, trifecta 센티널, 승인 알리미, 세션 리포트 — 는 관측하고 기록하고 보고할 뿐,
+차단도 판정도 하지 않습니다. 가치가 있지만 값도 있습니다: 등록된 훅 하나가 대응 도구 호출마다
+별도 `node` 프로세스입니다. 전체 세트는 `Bash`/`Write`/`Edit` 호출당 2–3개 프로세스 —
+Mary 워크플로를 쓰지 않는 세션·프로젝트에서도 매 호출 체감되는 지연입니다.
+
+그래서 등록이 티어로 나뉩니다:
+
+| 티어 | 등록 | 게이트 대상 호출당 비용 | 포기하는 것 |
+|---|---|---|---|
+| **gate** (기본) | `PreToolUse` 게이트만 | 프로세스 1개 | 승인→결과 결속, 세션 시작 `unknown` 보고, trifecta 경고, 승인 핑. 원장에는 `asked`가 계속 기록되지만 결과는 관측되지 않으며, 수동 종결(`mary-reconcile`)은 그대로 동작합니다. |
+| **full** | 게이트 + 기록기 + 센티널 + 알리미 + 리포트 | 프로세스 2–3개 | 없음 — 이 README가 기술하는 관측 계약 전부가 이 티어입니다. |
+
+플러그인의 `hooks/hooks.json`은 gate 티어를 등록합니다. full 티어는 관리형 설치에서 선택하거나
+(`install-managed.ps1 -Tier full` / `install-managed.sh --tier full`), 관측 훅 넷을 사용자
+settings에 직접 등록해서 얻습니다. 아래에서 결과 기록·`unknown` 보고·trifecta 경고·핑을
+설명하는 절은 **full 티어** 동작입니다.
+
+무인·장시간 작업처럼 원장이 세션이 죽은 뒤에도 "실제로 실행됐나?"에 답해야 하면 full을,
+조용한 상시 승인 체크포인트가 우선이면 gate를 고르세요. 제공하지 **않는** 것은 게이트 앞에서
+명령을 선별하는 티어(예: 훅의 권한 규칙 `if` 필터)입니다 — 게이트의 파싱은 명령 문자열 글롭이
+우회 가능하다는 사실 때문에 존재하므로, 그 앞의 필터는 정확히 그 우회 부류를 다시 엽니다.
 
 ### 승인 원장과 `unknown` 결과
 
@@ -281,7 +311,7 @@ unknown 승인을 닫지 않고, 잉여 종결은 다음 asked를 선지불하�
 
 ### 원격 알림 — 원격 승인이 아니라
 
-`mary-approval-notifier.js`(`Notification` 훅, `permission_prompt` matcher)는
+`mary-approval-notifier.js`(`Notification` 훅, `permission_prompt` matcher, full 티어에서 등록)는
 `~/.claude/mary/notify.json`에 설정한 웹훅으로 짧은 핑을 보낼 수 있습니다 — 예를 들어 휴대폰이
 구독하는 [ntfy.sh](https://ntfy.sh) 토픽. 승인 대기를 알아채기 위해 터미널 앞을 지킬 필요가
 없어집니다:
@@ -329,10 +359,10 @@ unknown 승인을 닫지 않고, 잉여 종결은 다음 asked를 선지불하�
 
 ```
 # Windows — 관리자 권한 PowerShell
-powershell -ExecutionPolicy Bypass -File scripts\install-managed.ps1 [-AllowManagedHooksOnly]
+powershell -ExecutionPolicy Bypass -File scripts\install-managed.ps1 [-Tier gate|full] [-AllowManagedHooksOnly]
 
 # macOS / Linux
-sudo sh scripts/install-managed.sh [--allow-managed-hooks-only]
+sudo sh scripts/install-managed.sh [--tier gate|full] [--allow-managed-hooks-only]
 ```
 
 둘 다 훅 스크립트를 관리자 소유 폴더에 복사**하고** `managed-settings.json`에 절대 경로로
@@ -413,7 +443,7 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 | `skills/mary/LAYERS.md` | 정규 실패 키 |
 | `agents/mary-critic.md` | 4-2 단계가 쓰는 읽기 전용 반례 검토자 |
 | `scripts/mary-stats.js` | 카운터·승격 후보를 재계산하는 읽기 전용 검산기 |
-| `hooks/hooks.json` | `PreToolUse`·`PostToolUse`·`PostToolUseFailure`·`PermissionDenied`·`Notification`·`SessionStart` 등록 |
+| `hooks/hooks.json` | `PreToolUse` 게이트 등록 (기본 gate 티어 — 관측 훅들은 full 티어 관리형 설치가 등록) |
 | `scripts/hooks/mary-irreversible-gate.js` | 게이트 대상에는 `ask`, 비매치에는 무출력 무판정. 교차세션·trifecta 맥락 경고 추가 |
 | `scripts/hooks/mary-outcome-recorder.js` | 대응하는 승인의 관측 결과 기록 |
 | `scripts/hooks/mary-session-report.js` | 세션 시작 시 미결 승인을 `unknown`으로 보고 |
@@ -463,7 +493,7 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 
 ## 개발 상태
 
-**현재 버전: Rv.0 / plugin 0.4.4 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
+**현재 버전: Rv.0 / plugin 0.4.5 · Experimental** — 릴리스 이력은 [`CHANGELOG.md`](CHANGELOG.md)
 
 동작 중: 6단계 절차, Standard/Guarded 등급, 검증→반례→수정→재검증, 사용자 언어 자동 일치,
 다중 `_work` 기록, 실패 적립과 사용자 승인 승격, 비가역 게이트(래퍼 세탁 패턴 포함),
@@ -474,7 +504,7 @@ Mary는 런타임 상태를 저장소 밖 `~/.claude/mary/`에 둡니다. 파일
 명령어 자리 따옴표·리다이렉션 정규화, CI(GitHub Actions, Node 20/22 · Linux/Windows, 매트릭스 전 레그 완주),
 검증 영수증 회차 간 연속성 검산(재검 비율·통과→실패 뒤집힘·공통 항목 0),
 4-2 반례 축 로테이션(명세 부합 · 상태와 구조 · 경계와 회귀 · 운용), 정체 감지(2회차 연속 완료 조건
-0건 종결 시 중단·보고), 회귀 검사 292건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
+0건 종결 시 중단·보고), 회귀 검사 305건 — 조회·전환 형태(`git checkout main`, `git restore --staged`, `git gc`,
 `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`)가 승인을 **요구하지 않아야** 한다는
 음성 테스트군 포함 — 그리고 명령 287건의 **판정 스냅샷**(`tests/decisions.test.js`): 고정된
 판정(`ask`+분류 또는 `defer`)이 어느 방향으로든 움직이면 CI가 실패하므로, 판정 완화는 의도적

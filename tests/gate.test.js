@@ -488,6 +488,15 @@ t('different tool, different hash', () => {
   assert.notStrictEqual(ledger.requestHash('Bash', { command: 'a' }),
                         ledger.requestHash('Write', { command: 'a' }));
 });
+t('cwd normalization ignores case on Windows only', () => {
+  if (process.platform === 'win32') {
+    assert.strictEqual(ledger.normalizeCwd('C:\\Repo-A'), ledger.normalizeCwd('c:\\repo-a'),
+      'win32 paths are case-insensitive; case must not break approval matching');
+  } else {
+    assert.notStrictEqual(ledger.normalizeCwd('/Repo-A'), ledger.normalizeCwd('/repo-a'),
+      'posix paths are case-sensitive; distinct paths must stay distinct');
+  }
+});
 
 console.log('\n[ledger — binding approval to execution]');
 t('ask records an asked event', () => {

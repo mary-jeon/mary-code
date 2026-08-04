@@ -1,12 +1,18 @@
 #!/usr/bin/env sh
 # Mary — managed (administrator) deployment · macOS / Linux
 #
-#   sudo sh scripts/install-managed.sh [--allow-managed-hooks-only] [--force]
+#   sudo sh scripts/install-managed.sh [--tier gate|full] [--allow-managed-hooks-only] [--force]
 #
 # Same contract as install-managed.ps1: copies scripts/ to a root-owned folder
 # next to managed-settings.json and registers the hooks there with absolute
 # paths. Without root this is impossible, and the user-space gate remains
 # visibility, not enforcement (see README "Enforcement boundary").
+#
+# Tiers (--tier, default: gate):
+#   gate  ONLY the PreToolUse irreversible-action gate — the prevention layer.
+#         No outcome ledger closure, no trifecta warning, no unknown report, no ping.
+#   full  adds the observability set (recorder, sentinel, notifier, session report)
+#         — required for approval→outcome binding, at 2-3 hook processes per call.
 #
 # Re-run behavior: safe for upgrades. Settings are validated BEFORE anything is
 # copied, the target scripts folder is replaced (not merged/nested into), the
@@ -22,14 +28,21 @@ esac
 MANAGED_DIR=$(dirname "$MANAGED")
 INSTALL_DIR="$MANAGED_DIR/mary"
 
-ALLOW_ONLY=0; FORCE=0
+ALLOW_ONLY=0; FORCE=0; TIER=gate; expect_tier=0
 for a in "$@"; do
+  if [ "$expect_tier" = "1" ]; then
+    TIER="$a"; expect_tier=0; continue
+  fi
   case "$a" in
     --allow-managed-hooks-only) ALLOW_ONLY=1 ;;
     --force) FORCE=1 ;;
+    --tier) expect_tier=1 ;;
+    --tier=*) TIER="${a#--tier=}" ;;
     *) echo "unknown option: $a" >&2; exit 1 ;;
   esac
 done
+[ "$expect_tier" = "0" ] || { echo "missing value for --tier" >&2; exit 1; }
+case "$TIER" in gate|full) ;; *) echo "invalid --tier: $TIER (gate|full)" >&2; exit 1 ;; esac
 
 [ "$(id -u)" = "0" ] || { echo "Root required (sudo). Without it a managed deployment is not possible." >&2; exit 1; }
 command -v node >/dev/null 2>&1 || { echo "node not found on PATH." >&2; exit 1; }
@@ -57,7 +70,7 @@ rm -rf "$INSTALL_DIR/scripts"
 cp -R "$REPO_ROOT/scripts" "$INSTALL_DIR/scripts"
 
 # ── 3+4. Merge, write, and parse-check — in node (already required for the hooks) ──
-MANAGED="$MANAGED" INSTALL_DIR="$INSTALL_DIR" ALLOW_ONLY="$ALLOW_ONLY" node <<'EOF'
+MANAGED="$MANAGED" INSTALL_DIR="$INSTALL_DIR" ALLOW_ONLY="$ALLOW_ONLY" TIER="$TIER" node <<'EOF'
 const fs = require('fs');
 const path = require('path');
 
@@ -66,20 +79,25 @@ const H = path.join(process.env.INSTALL_DIR, 'scripts', 'hooks');
 const cmd = f => ({ type: 'command', command: `node "${path.join(H, f)}"` });
 const WRITE_TOOLS = 'Bash|Write|Edit|MultiEdit|NotebookEdit';
 
+// gate tier: prevention only. Everything below the gate is observability —
+// never blocks, never decides — and each entry is a hook process on the hot path.
 const maryHooks = {
   PreToolUse: [
     { matcher: WRITE_TOOLS, hooks: [cmd('mary-irreversible-gate.js')] },
   ],
-  PostToolUse: [
+};
+
+if (process.env.TIER === 'full') {
+  maryHooks.PostToolUse = [
     { matcher: WRITE_TOOLS, hooks: [cmd('mary-outcome-recorder.js')] },
     // PostToolUse, not PreToolUse: a denied fetch ingested nothing.
     { matcher: 'WebFetch|WebSearch|Bash', hooks: [cmd('mary-trifecta-sentinel.js')] },
-  ],
-  PostToolUseFailure: [{ matcher: WRITE_TOOLS, hooks: [cmd('mary-outcome-recorder.js')] }],
-  PermissionDenied:   [{ matcher: WRITE_TOOLS, hooks: [cmd('mary-outcome-recorder.js')] }],
-  Notification:       [{ matcher: 'permission_prompt', hooks: [cmd('mary-approval-notifier.js')] }],
-  SessionStart:       [{ matcher: '*', hooks: [cmd('mary-session-report.js')] }],
-};
+  ];
+  maryHooks.PostToolUseFailure = [{ matcher: WRITE_TOOLS, hooks: [cmd('mary-outcome-recorder.js')] }];
+  maryHooks.PermissionDenied   = [{ matcher: WRITE_TOOLS, hooks: [cmd('mary-outcome-recorder.js')] }];
+  maryHooks.Notification       = [{ matcher: 'permission_prompt', hooks: [cmd('mary-approval-notifier.js')] }];
+  maryHooks.SessionStart       = [{ matcher: '*', hooks: [cmd('mary-session-report.js')] }];
+}
 
 let settings = {};
 let backup = null;
@@ -109,6 +127,9 @@ console.log('');
 console.log('Managed deployment complete (written file passed JSON.parse).');
 console.log(`  hook scripts : ${H}/`);
 console.log(`  registration : ${managed}`);
+console.log(`  tier         : ${process.env.TIER === 'full'
+  ? 'full — gate + outcome recorder + trifecta sentinel + notifier + session report'
+  : 'gate — PreToolUse gate only. NOT active: approval→outcome binding, trifecta warnings, unknown reports, pings (re-run with --tier full to add them)'}`);
 console.log(`  managed-only : ${process.env.ALLOW_ONLY === '1'
   ? 'ON — non-managed hooks (user/project/plugins) will not load'
   : 'off — user-space hooks still load alongside; a plugin install of Mary would then run every hook twice'}`);

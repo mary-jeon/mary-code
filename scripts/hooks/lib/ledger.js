@@ -95,9 +95,15 @@ function maskDeep(v) {
   return v;
 }
 
+/* Windows filesystems are case-insensitive: the same directory can arrive as
+ * C:\Repo in one event and c:\repo in another. Comparing case-sensitively there
+ * silently drops cross-session warnings and legacy outcome matches — so fold
+ * case on win32 only. POSIX paths are genuinely case-sensitive and stay as-is. */
 function normalizeCwd(cwd) {
   if (!cwd) return null;
-  try { return path.resolve(String(cwd)); } catch { return String(cwd); }
+  let resolved;
+  try { resolved = path.resolve(String(cwd)); } catch { resolved = String(cwd); }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function compactRequest(toolInput) {

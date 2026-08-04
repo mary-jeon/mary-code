@@ -1,6 +1,6 @@
 # Mary
 
-> **Rv.0 / plugin 0.4.4 · Experimental · Claude Code**
+> **Rv.0 / plugin 0.4.5 · Experimental · Claude Code**
 >
 > **English** (canonical) · [한국어](./README.ko.md)
 
@@ -12,12 +12,12 @@ Mary does not change the model. It changes how work is framed, executed, checked
 
 ## What is in Rv.0
 
-Rv.0 is the first public release of Mary as a Claude Code plugin: a workflow skill plus an execution layer that enforces part of the workflow with hooks.
+Rv.0 is Mary's public line as a Claude Code plugin: a workflow skill plus an execution layer that enforces part of the workflow with hooks. Since 0.4.5 the plugin is **gate-first**: the only hook it registers by default is the `PreToolUse` irreversible-action gate — quiet prevention on every call, with observability as an explicit choice (see "Hook tiers").
 
-- A `PreToolUse` gate asks for permission before recognized irreversible shell actions run.
-- `PostToolUse` and `PostToolUseFailure` hooks connect an approval request to the observed execution result.
-- A `PermissionDenied` hook closes an approval as `denied` when the host reports the denial.
-- A `SessionStart` hook reports approvals whose result was never recorded as `unknown`; they are never treated as failed or automatically retried.
+- A `PreToolUse` gate asks for permission before recognized irreversible shell actions run. **This is the only hook the plugin registers by default** — see "Hook tiers" below.
+- Full tier only: `PostToolUse` and `PostToolUseFailure` hooks connect an approval request to the observed execution result.
+- Full tier only: a `PermissionDenied` hook closes an approval as `denied` when the host reports the denial.
+- Full tier only: a `SessionStart` hook reports approvals whose result was never recorded as `unknown`; they are never treated as failed or automatically retried.
 - An append-only approval ledger stores a secret-masked reason, compact request metadata, the host `tool_use_id`, a raw-input request hash for integrity/legacy fallback, and the observed result. Write/Edit/Notebook bodies and tool response bodies are never stored.
 - A bundled read-only `mary-critic` agent gives the adversarial-review stage a fixed, tool-restricted reviewer profile.
 - A `mary-stats.js` auditor recomputes failure counters and rule-promotion candidates deterministically, instead of trusting the model's arithmetic.
@@ -135,7 +135,7 @@ Mary has two protection layers, and they are not the same thing:
 
 The gate's job is **routing to a human, not classification.** No pattern set reads full shell semantics, so the goal is not "recognize every dangerous command" — it is impossible. The goal is: route recognized risk, and everything the gate cannot judge, to the person; and never let a pattern produce an automatic allow. The actual defense line is the human approval button, which no encoding trick can pattern-match its way past — the patterns only decide when a human has to look.
 
-The Rv.0 hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
+The gate hook is registered for `Bash`, `Write`, `Edit`, `MultiEdit`, and `NotebookEdit`. It asks for permission when it recognizes:
 
 - file deletion, including non-recursive and path-prefixed forms (`rm`, `/bin/rm`, `del`, `Remove-Item`, `Clear-Content`, `find -delete`, `shred`);
 - `git push` (with global options such as `-C` and quoted values such as `-c core.pager="less -n"` tolerated). The `--dry-run` exemption is **parsed, not string-matched**: it counts only when the flag is a real argument of that `push`, in that command segment — a commented-out flag, a `-n` that is the value of `--push-option`, or one borrowed from a config value does not buy it. Also destructive Git reset/clean operations, forced branch deletion, and `--no-verify` bypasses;
@@ -166,7 +166,22 @@ When the gate asks, it may append two best-effort context warnings to the text t
 - **Cross-session visibility.** Unresolved approvals from *other sessions* that target the same working directory are surfaced, because their unknown outcomes mean the state the user just reviewed may have changed. This is exactly why the ledger is shared rather than split per session — isolation would hide the collision; sharing makes it visible. (Matching is by cwd string; two clones of the same remote in different folders are not detected.)
 - **Lethal-trifecta signal.** `mary-trifecta-sentinel.js` (a `PostToolUse` observer on `WebFetch`, `WebSearch`, and fetch-shaped Bash commands — PostToolUse so a *denied* fetch, which ingested nothing, never poisons the signal) records when a session ingests untrusted external content. If the same session later asks approval for an *external send* — or for a wrapped/encoded command the gate cannot read, which may be one — the gate adds a trifecta warning. Two of the three legs are observable; private-data access, the third, is not reliably detectable from tool calls — claiming otherwise would be false confidence, so it is not claimed.
 
-Both warnings are visibility only: they never change the decision, never block, and never auto-deny.
+Both warnings are visibility only: they never change the decision, never block, and never auto-deny. The trifecta warning depends on the sentinel being registered, which is a **full-tier** installation (see next section) — under the default gate tier the marker is never written and the warning never appears.
+
+### Hook tiers — prevention by default, observability by choice
+
+Only one of Mary's five hook scripts prevents anything: the `PreToolUse` gate. The other four — outcome recorder, trifecta sentinel, approval notifier, session report — observe, record, and report; none of them blocks or decides. They are valuable, and they have a price: every registered hook is a separate `node` process on the hot path of every matching tool call. The full set costs 2–3 processes per `Bash`/`Write`/`Edit` call, which is visible latency in every session on every project, whether or not Mary's workflow is in use.
+
+So registration is tiered:
+
+| Tier | Registers | Cost per gated call | What you give up |
+|---|---|---|---|
+| **gate** (default) | `PreToolUse` gate only | 1 process | Approval→outcome binding, `unknown` reports at session start, trifecta warnings, approval pings. The ledger still records every `asked` event; outcomes are simply never observed, and `mary-reconcile` still works for closing them by hand. |
+| **full** | Gate + recorder + sentinel + notifier + session report | 2–3 processes | Nothing — this is the complete observability contract described in this README. |
+
+The plugin's own `hooks/hooks.json` registers the gate tier. The full tier is selected at managed installation (`install-managed.ps1 -Tier full` / `install-managed.sh --tier full`), or by registering the four observability hooks yourself in user settings. Sections below that describe outcome recording, `unknown` reporting, trifecta warnings, or pings describe **full-tier** behavior.
+
+Choose full when the approval ledger must be able to answer "did it actually run?" across crashed sessions — for example unattended or long-running work — and gate when the priority is a quiet, always-on approval checkpoint. What is *not* offered is a tier that pre-filters which commands reach the gate (for example a permission-rule `if` on the hook): the gate's parsing exists precisely because command-string globs are bypassable, and a filter in front of it would reopen that class.
 
 ### Approval ledger and `unknown` results
 
@@ -196,7 +211,7 @@ Invoking `mary-reconcile` through Bash is **itself a gated action**: the approva
 
 ### Remote notification, not remote approval
 
-`mary-approval-notifier.js` (a `Notification` hook on the `permission_prompt` matcher) can POST a short ping to a webhook configured in `~/.claude/mary/notify.json` — for example an [ntfy.sh](https://ntfy.sh) topic your phone subscribes to — so a waiting approval no longer requires sitting at the terminal to notice it:
+`mary-approval-notifier.js` (a `Notification` hook on the `permission_prompt` matcher, registered in the full tier) can POST a short ping to a webhook configured in `~/.claude/mary/notify.json` — for example an [ntfy.sh](https://ntfy.sh) topic your phone subscribes to — so a waiting approval no longer requires sitting at the terminal to notice it:
 
 ```json
 { "url": "https://ntfy.sh/your-private-topic", "headers": { "Title": "mary" } }
@@ -234,10 +249,10 @@ A one-command managed deployment ships with the repo:
 
 ```
 # Windows — elevated PowerShell
-powershell -ExecutionPolicy Bypass -File scripts\install-managed.ps1 [-AllowManagedHooksOnly]
+powershell -ExecutionPolicy Bypass -File scripts\install-managed.ps1 [-Tier gate|full] [-AllowManagedHooksOnly]
 
 # macOS / Linux
-sudo sh scripts/install-managed.sh [--allow-managed-hooks-only]
+sudo sh scripts/install-managed.sh [--tier gate|full] [--allow-managed-hooks-only]
 ```
 
 Both copy the hook scripts to an administrator-owned folder **and** register them with absolute paths in `managed-settings.json` — a managed registration pointing at user-writable scripts would be hollow. Existing managed settings are validated **before** anything is copied and backed up before being touched; an existing `hooks` section is never replaced without an explicit force flag; re-runs replace the deployed scripts folder instead of nesting into it; and the written file is parse-checked (written without a BOM — a BOM can make a strict JSON parser reject the file and silently turn the deployment into a no-op).
@@ -299,7 +314,7 @@ The plugin components must stay together.
 | `skills/mary/LAYERS.md` | Canonical failure keys and aliases |
 | `agents/mary-critic.md` | Read-only adversarial reviewer used by stage 4-2 |
 | `scripts/mary-stats.js` | Read-only auditor that recomputes counters and promotion candidates |
-| `hooks/hooks.json` | Registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `Notification`, and `SessionStart` |
+| `hooks/hooks.json` | Registers the `PreToolUse` gate (the default gate tier; the observability hooks are registered by the full-tier managed install) |
 | `scripts/hooks/mary-irreversible-gate.js` | Recognizes gated actions, returns `ask` for them, and emits no decision for non-matches; adds cross-session and trifecta context warnings |
 | `scripts/hooks/mary-outcome-recorder.js` | Records the observed result for a matching approval |
 | `scripts/hooks/mary-session-report.js` | Reports unresolved approvals as `unknown` at session start |
@@ -339,7 +354,7 @@ The plugin components must stay together.
 
 ## Development status
 
-**Current version: Rv.0 / plugin 0.4.4 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
+**Current version: Rv.0 / plugin 0.4.5 · Experimental** — release history in [`CHANGELOG.md`](CHANGELOG.md)
 
 Working now:
 
@@ -363,7 +378,7 @@ Working now:
 - a published threat model ([`docs/threat-model.md`](docs/threat-model.md)) covering demonstrated-and-closed bypasses and the surfaces open by construction;
 - secret masking on stored ledger copies, plugin-root-anchored self-protection, a parsed (not string-matched) `--dry-run` exemption, and command-word quote normalization;
 - continuous integration (GitHub Actions, Node 20/22 on Linux and Windows, every matrix leg run to completion); and
-- 292 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
+- 305 regression checks across the gate, ledger, reconcile CLI, sentinel, notifier, auditor, and session reporting — including a negatives group asserting that the reading and switching forms (`git checkout main`, `git restore --staged`, `git gc`, `psql -c "select 1"`, `gh api -X GET`, `gcloud … list`) must *not* ask; and
 - a 287-command decision snapshot (`tests/decisions.test.js`): every pinned judgment — `ask` with its category, or `defer` — fails CI if it moves in either direction, so a weakened decision can only ship through a deliberate snapshot regeneration whose diff shows exactly what moved; and a pin that contradicts its corpus section's declared intent ("must ask" / "must stay defer") fails even the regeneration — a snapshot pins the gate's actual output, so without this a regenerated snapshot pins the gate's bugs as expected behavior.
 
 In development:
