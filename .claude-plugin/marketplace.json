@@ -1,0 +1,15 @@
+{
+  "name": "mary-code",
+  "owner": {
+    "name": "mary jeon",
+    "url": "https://github.com/mary-jeon"
+  },
+  "plugins": [
+    {
+      "name": "mary",
+      "source": "./",
+      "description": "Task harness for Claude Code. Proceeds autonomously on reversible work, verifies claims against observable evidence, and gates irreversible actions behind user approval. By default registers only the fail-closed PreToolUse gate for irreversible actions (deletion, push, external send, deploy) — quiet on every other call.",
+      "version": "0.4.5"
+    }
+  ]
+}
