@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Hook registration is now tiered, and the default is **gate-only**: the plugin's
+  `hooks/hooks.json` registers only the `PreToolUse` irreversible-action gate. The
+  observability set (outcome recorder, trifecta sentinel, approval notifier, session
+  report) is registered by the managed installers' new `-Tier full` / `--tier full`
+  option. Rationale: only the gate prevents anything; the other four hooks cost 2–3
+  `node` processes per `Bash`/`Write`/`Edit` call in every session on every project,
+  which in practice led to disabling all hooks — losing the gate with them.
+- Stated plainly in README and the threat model: under the gate tier there is no
+  approval→outcome binding, no session-start `unknown` report, no trifecta warning,
+  and no approval ping. `asked` events are still written; `mary-reconcile` still
+  closes them by hand. A command-prefilter tier (permission-rule `if` in front of
+  the gate) is deliberately not offered — it would reopen the bypass class the
+  gate's parsing exists to close.
+
 - Non-matching gate calls now emit no hook decision instead of `defer`; malformed or unjudgeable inputs still ask.
 - Approval outcomes bind by `tool_use_id`, with normalized cwd/session/hash used only for strict legacy fallback.
 - Ledger read, parse, and append failures are visible instead of being reported as an empty or fully audited ledger.

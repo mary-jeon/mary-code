@@ -10,17 +10,26 @@ exists so the second failure cannot happen.
 
 ## 1. What is enforced
 
+Registration is tiered (README "Hook tiers"): the default **gate** tier registers only
+the `PreToolUse` gate; the **full** tier adds the observability hooks (outcome
+recorder, trifecta sentinel, approval notifier, session report). Prevention — the
+first and third bullets below — holds in both tiers. Approval→outcome binding, the
+`unknown` report, and the trifecta escalation exist only where their hooks are
+registered: claims about them in this document are **full-tier claims**.
+
 - **Irreversible-action gating.** `PreToolUse` intercepts `Bash | Write | Edit |
   MultiEdit | NotebookEdit` calls. Registered irreversible shapes (deletion,
   overwrite, external send, deployment, gate bypass, ledger closure,
   enforcement-config change) return `ask` — a human sees a dialog before the call
   runs. Everything else emits no hook decision (exit 0 with empty stdout), never
   `allow`; the host's normal permission flow remains authoritative.
-- **Approval→outcome binding.** Every `ask` appends an `asked` record with the
+- **Approval→outcome binding** (full tier). Every `ask` appends an `asked` record with the
   host `tool_use_id`, normalized cwd, and a canonical request hash. Closing events
   bind by `tool_use_id`; strict session+cwd+hash matching exists only for legacy
   events without an id. An approval with no closing record is **unknown** — reported
-  at every session start until a human closes it with observed evidence.
+  at every session start until a human closes it with observed evidence. Under the
+  gate tier, `asked` records are still written but no outcome ever arrives and no
+  session-start report runs; closure happens only through `mary-reconcile`.
 - **Fail-closed judgment.** Unreadable stdin, broken JSON, a missing tool name, an
   empty command, an internal exception — every failure to judge ends in `ask`,
   never in a pass. (Tests: `[fail-closed — cannot judge is not a pass]`.)
@@ -49,7 +58,7 @@ Mary at all. Mitigation: the matcher list is short, explicit, and lives in
 | Class | Example | Defense |
 |---|---|---|
 | **Careless agent** | runs `rm -rf` on the wrong dir mid-plan | gate asks; human reads target/scope/rollback |
-| **Instruction-injected agent** | web page tells it to `curl -F` a secrets file out | gate asks; trifecta sentinel escalates the dialog when the session has ingested untrusted content |
+| **Instruction-injected agent** | web page tells it to `curl -F` a secrets file out | gate asks; the trifecta sentinel (full tier) escalates the dialog when the session has ingested untrusted content |
 | **Gate-aware agent** | wraps the action so no pattern matches | wrapping itself (`bash -c`, interpreter `-c/-e`, encoded PowerShell, `ssh host cmd`, pipe-to-shell) is gated as *cannot judge → ask* |
 | **Record-falsifying agent** | edits the ledger or its own receipts to fake compliance | see §6 — partially defended, honestly bounded |
 | **Malicious human with file access** | edits hooks out of settings | **out of scope.** The gate defends the human's decision authority against the agent, not the machine against its owner |
@@ -204,7 +213,8 @@ it, so it stays user-writable by necessity. Consequences, stated plainly:
 
 ## 6. What the ledger can and cannot prove
 
-Can prove (assuming hooks were installed and running):
+Can prove (assuming the relevant hooks were installed and running — outcome and
+`unknown` rows require the full tier):
 
 - that a matching gate dialog was **presented** (`asked` plus a masked copy of its reason),
 - that the host later reported the call **succeeded / failed / was denied**
