@@ -98,14 +98,25 @@ Guarded는 탐색을 줄이지 않습니다. 결정 확정 전에 요구되는 �
 - 스킬 디렉터리 플러그인을 지원하는 최신 **Claude Code**
 - **Node.js** (훅 스크립트가 `node`로 실행됨)
 
-### macOS / Linux
+### 마켓플레이스 설치 (권장)
+
+Claude Code 안에서:
+
+```text
+/plugin marketplace add mary-jeon/mary-code
+/plugin install mary@mary-code
+```
+
+그 뒤 Claude Code를 재시작합니다. `mary@mary-code`로 설치되고, 업데이트는 `/plugin` 메뉴로 받습니다.
+
+### 수동 설치 — macOS / Linux
 
 ```bash
 git clone https://github.com/mary-jeon/mary-code.git ~/.claude/skills/mary
 claude plugin validate --strict ~/.claude/skills/mary
 ```
 
-### Windows PowerShell
+### 수동 설치 — Windows PowerShell
 
 ```powershell
 git clone https://github.com/mary-jeon/mary-code.git "$HOME\.claude\skills\mary"

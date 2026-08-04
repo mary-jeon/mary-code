@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Self-hosted plugin marketplace manifest (`.claude-plugin/marketplace.json`):
+  installation becomes `/plugin marketplace add mary-jeon/mary-code` +
+  `/plugin install mary@mary-code`. Both READMEs now lead with the marketplace
+  install; the skills-directory clone remains as the manual path.
+
 ## 0.4.5 — 2026-08-05
 
 Quieter by default. The install cost that made users disable everything — losing

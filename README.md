@@ -84,14 +84,25 @@ Mary requires:
 - a recent version of **Claude Code** with skills-directory plugin support; and
 - **Node.js**, because the hook scripts run with `node`.
 
-### macOS / Linux
+### From the marketplace (recommended)
+
+Inside Claude Code:
+
+```text
+/plugin marketplace add mary-jeon/mary-code
+/plugin install mary@mary-code
+```
+
+Then restart Claude Code. This installs the plugin as `mary@mary-code`; updates arrive through the `/plugin` menu.
+
+### Manual install — macOS / Linux
 
 ```bash
 git clone https://github.com/mary-jeon/mary-code.git ~/.claude/skills/mary
 claude plugin validate --strict ~/.claude/skills/mary
 ```
 
-### Windows PowerShell
+### Manual install — Windows PowerShell
 
 ```powershell
 git clone https://github.com/mary-jeon/mary-code.git "$HOME\.claude\skills\mary"
