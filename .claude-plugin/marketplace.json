@@ -1,5 +1,6 @@
 {
   "name": "mary-code",
+  "description": "Mary's own marketplace: a task harness for Claude Code whose default install is a fail-closed approval gate for irreversible actions.",
   "owner": {
     "name": "mary jeon",
     "url": "https://github.com/mary-jeon"
