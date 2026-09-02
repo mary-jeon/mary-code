@@ -1,5 +1,11 @@
 # Threat model
 
+> **Scope note (0.5.0).** The gate and ledger described here are an **optional** component. The
+> plugin registers no hooks; nothing on this page is active unless you register the gate yourself
+> (`docs/gate.md`). The document is kept because the option is still shipped and still reviewable.
+> Findings reproduced on 2026-09-02 and not yet fixed are listed in `docs/gate.md` under
+> "Known open findings".
+
 What the gate and ledger actually enforce, who they defend against, the bypasses we
 know about, and what the records can and cannot prove. Everything here is testable;
 where a claim has a regression test, the test name is given.

@@ -1,16 +1,15 @@
 {
   "name": "mary",
   "displayName": "Mary",
-  "version": "0.4.5",
-  "description": "Task harness for Claude Code. Proceeds autonomously on reversible work, verifies claims against observable evidence, and gates irreversible actions behind user approval.",
+  "version": "0.5.0",
+  "description": "Hallucination-prevention harness for Claude Code. A six-stage procedure that separates verifiable claims from judgment, checks claims against observable evidence, attacks its own output with a read-only critic, and keeps failure records across sessions. Installs no hooks and runs nothing in the background.",
   "author": {
     "name": "mary jeon",
     "url": "https://github.com/mary-jeon"
   },
   "repository": "https://github.com/mary-jeon/mary-code",
   "license": "MIT",
-  "keywords": ["harness", "verification", "approval-gate", "failure-taxonomy"],
+  "keywords": ["harness", "verification", "hallucination", "failure-taxonomy"],
   "skills": "./skills/",
-  "agents": ["./agents/mary-critic.md"],
-  "hooks": "./hooks/hooks.json"
+  "agents": ["./agents/mary-critic.md"]
 }

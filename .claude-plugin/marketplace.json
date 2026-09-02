@@ -1,6 +1,6 @@
 {
   "name": "mary-code",
-  "description": "Mary's own marketplace: a task harness for Claude Code whose default install is a fail-closed approval gate for irreversible actions.",
+  "description": "Mary's own marketplace: a hallucination-prevention harness for Claude Code — procedure, evidence, and records, with no hooks and nothing running in the background.",
   "owner": {
     "name": "mary jeon",
     "url": "https://github.com/mary-jeon"
@@ -9,8 +9,8 @@
     {
       "name": "mary",
       "source": "./",
-      "description": "Task harness for Claude Code. Proceeds autonomously on reversible work, verifies claims against observable evidence, and gates irreversible actions behind user approval. By default registers only the fail-closed PreToolUse gate for irreversible actions (deletion, push, external send, deploy) — quiet on every other call.",
-      "version": "0.4.5"
+      "description": "Hallucination-prevention harness for Claude Code. Six-stage procedure: separate verifiable claims from judgment, verify against observable evidence, attack the output with a read-only critic, re-verify, and keep failure records that survive sessions. Installs no hooks; an approval gate is available as an opt-in extra.",
+      "version": "0.5.0"
     }
   ]
 }

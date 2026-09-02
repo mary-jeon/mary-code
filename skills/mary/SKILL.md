@@ -67,6 +67,22 @@ If something was compressed, **record that fact and the reason** in stage 5.
 > And the judge of "self-evident" is always the generator itself (↔L8) — removing that question
 > from the explicit path removes the very opportunity to misjudge it.
 
+### Delegation — a granted mandate holds for the whole session  ↔L6
+
+When the user has said "go ahead", "decide yourself", "I'll be away", or has picked an option and
+told you to continue, **that mandate holds until the task ends or the user speaks again.** Under it:
+
+- Stage 1 and stage 2 confirmations are **not asked**. Write the interpretation you chose and the
+  option you recommend into `_work.md` as `(delegated — chosen without asking)` and continue.
+- Reporting is never a reason to end the turn. A progress report is written, not waited on.
+- **The only stops are irreversible actions** (delete · overwrite · external send · deploy ·
+  business-system write) and a stagnation stop (4-4). Everything else proceeds.
+- Asking for approval on a *reversible* step is the same failure as skipping approval on an
+  irreversible one: the first trains the user to turn the harness off, the second is what the
+  harness exists to prevent.
+
+Without a mandate, ask — but one question, as choices, and only where interpretations genuinely split.
+
 ## Workspace — zero configuration
 
 **Always and only `~/.claude/mary/`.** This expression points to the same place under the
@@ -89,7 +105,8 @@ distribution only work if they accumulate in one place. Domain separation is alr
 | `RULES.md` | Promoted standing rules + confirmed facts (long-term memory). **One file.** |
 | `FAILLOG.md` | Cumulative counters + unresolved failures and rejected counterexamples. **One file.** |
 | `_work-<slug>.md` | One file per in-progress task. **Delete only when that task is `completed`.** Multiple may coexist |
-| `approvals.jsonl` | Append-only ledger of approvals and outcomes for irreversible actions. **Written by the hooks; never hand-edited.** Created by the hooks if missing |
+
+(`approvals.jsonl` appears here only if the optional approval gate is registered — see `docs/gate.md`. Mary itself never writes it.)
 
 > Wherever this document says `_work.md`, it means **"that task's `_work-<slug>.md` file"**.
 > The slug is the task-name part of `task_id` (e.g. `_work-p28-valvetrain-005.md`).
@@ -99,9 +116,8 @@ distribution only work if they accumulate in one place. Domain separation is alr
 > last read a `_work` file, re-read it immediately before writing** — the same re-check stage
 > 4-5 step 3 applies before irreversible execution. If it changed unexpectedly, another session
 > may own it: stop, tell the user, and append below the existing content rather than rewriting it.
-> RULES, FAILLOG, and the ledger stay **shared** on purpose — cross-session visibility (who else
-> has an open approval on this directory) is what prevents collisions on shared external state
-> like a git repository; per-session isolation would only hide them.
+> RULES and FAILLOG stay **shared** on purpose — the failure distribution and promotion only
+> work if every session writes to the same place; per-session isolation would only hide repeats.
 
 ## On start (every time, no exceptions)
 
@@ -191,6 +207,11 @@ sessions, so the same task would count several times. The promotion condition "2
 is judged by this ID alone. Same date and scope but different IDs → different tasks; different
 dates but the same ID → the same task continued.
 
+**Discussion or execution?** If the invocation and the wording diverge (`/mary` plus "let's talk
+this through", "review this", "what do you think"), or a premise that is expensive to reverse reads
+two ways (which layout, which baseline), confirm in **one line** which it is before producing anything.
+Invocation turns the harness on; it is not permission to execute. ↔L3
+
 Then judge and **state** three things:
 
 **(a) Damage blocking.** Does this task touch **delete · overwrite · external send · deploy ·
@@ -268,6 +289,25 @@ target this output.
 - If an irreversible operation is needed, first show **the target, the scope, and the way back**, and get approval.
 - Multi-step work keeps intermediate state in `_work.md`. If blocked midway: `status: blocked`.
 
+**Rules for producing anything with numbers, names, or dependencies in it** — these are where
+plausible-but-wrong output is born, and they cost nothing to follow: ↔L2 L14
+
+- **An unsourced value is an assumption, and is labeled as one.** A figure, coefficient, part
+  number, or "possible / not possible" that did not come from a catalog, a standard, a
+  measurement, a derivation, or the original text is written as `unverified` — **an empty cell
+  beats an invented one.** Next to an assumption, write what observation would confirm it and
+  whether it errs on the safe side (or that you do not know). A value inferred from a *category*
+  ("it is a ball valve, so ≈0.05"; "it is electronic, so ≈0") is exactly the kind that later
+  turns out non-conservative.
+- **Changing an input changes its dependents.** When a dimension, constant, parameter, symbol, or
+  coordinate reference is edited or removed, search the whole artifact for every reference and
+  recompute every downstream value **before** writing "final" or "confirmed" anywhere. A local edit
+  is judged by its effect outside the edited block (code: grep the symbol; documents: the siblings
+  after the insertion point; models: everything that reads the changed value).
+- **A computed value that no judgment consumes is a defect signal.** If the artifact computes a
+  clearance, a total, a check — and the verdict next to it is a literal `pass` or reads a
+  parameter instead — the verdict is decoration. Fix the verdict to read the computed value.
+
 > **What may be compressed and what may not.** In auto-activation · Standard, only the
 > **size and format of the output** may be compressed. The three lines above — the
 > irreversible-action gate (hold execution · show target and scope · prior approval) — are
@@ -288,6 +328,22 @@ Never write "confirmed" without having run the check.
 - Code → real execution and tests. Passing tests does not mean the spec is satisfied
 - Facts → original sources. **Statutes, institutional rules, regulations: original text, no exceptions**
 - Documents → build the checklist from the original first, then compare (omissions are invisible from the output alone)
+
+**How evidence is read — three rules that decide whether 4-1 means anything:** ↔L8 L11 L3
+
+- **Verdict inputs are independent of the thing judged.** Read pass/fail, dimensions, and state
+  from the **produced artifact** (the rendered geometry, the executed output, the file on disk,
+  the original text) — never from the parameter or literal that was supposed to produce it. A
+  check that reads its own input always passes.
+- **Every number in a report, receipt, or hand-off is a number you read off the artifact.** Not
+  copied from an earlier summary, not computed by hand from components, not rounded from memory.
+  Before the closing summary, run the final numbers once more and copy what printed. Two places
+  that state the same quantity (a value cell and its prose) are derived one from the other so
+  they cannot drift apart.
+- **"What is missing" needs an enumeration, not an inspection.** Omissions cannot be found by
+  checking what is present — every recount, exception sweep, and render check passes with the
+  item gone. List the required items from the source (IDs, requirements, parts, sections) and
+  match each one in the output; every unmatched ID is a finding.
 
 **If access to an original source is blocked** (WAF, bot walls, login walls), before concluding
 "cannot verify", **first try the access methods and skills available in this environment.**
@@ -461,13 +517,11 @@ The order is the defense:
      `non-idempotent-retry` and `partial-failure-state` are born exactly here. First observe the
      side effects to establish whether it ran.
 
-> **Enforcement is the hooks' job, not this document's.** Steps 1, 3, and 5 above are also enforced
-> by `PreToolUse`/`PostToolUse` hooks (when installed as a plugin). The hooks intercept tool calls,
-> bind irreversible actions to user approval, and record approvals and outcomes in
-> `~/.claude/mary/approvals.jsonl`. **For the hooks to be a trust boundary, they must live in
-> managed settings** — in user space (`~/.claude/skills/`) the agent could bypass them.
-> There, the hooks are not enforcement but a device that **makes bypasses visible**.
-> Installation tiers: see the README.
+> **Nothing enforces this stage mechanically.** Mary installs no hooks. The approval is a
+> procedure: the sentence the user saw (step 1) and the `[4-5]` line below are the record of it.
+> An optional approval gate that prompts on recognized irreversible shell commands exists in the
+> repository (`docs/gate.md`); it is off unless the user registers it, and this stage does not
+> depend on it.
 
 Write to `_work.md`: `- [4-5] irreversible execution <done/not applicable> / re-check <match/mismatch·re-approved> / outcome <success·failure·unknown>`.
 
@@ -615,6 +669,10 @@ Counter arithmetic follows the `counted_status` table in step 3. No judgment out
 - When **sensitive-data access · untrusted input · external transmission** all hold in one task,
   **report which capability was cut at which stage.** ↔L12
 - The same failure three times → stop and report. ↔L6
+- Time pressure shrinks **the size of the output**, never the procedure. "I only have an hour"
+  is not permission to skip a stage, a gate, or a syntax rule the tool spelled out. ↔L6
+- A mandate, once given, is not re-asked for. Reporting does not end the turn; only an
+  irreversible action or a stagnation stop does. ↔L6
 - Fact lookups prefer **the authoritative original language of the subject** and cross-check with
   an independent source. Local statutes, institutions, and standards follow the jurisdiction's
   original text. If answers diverge, report the divergence. ↔L10
