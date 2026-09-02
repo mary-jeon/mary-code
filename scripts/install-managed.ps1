@@ -61,7 +61,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-foreach ($rel in 'scripts\hooks\mary-irreversible-gate.js', 'scripts\hooks\lib\ledger.js', 'hooks\hooks.json') {
+foreach ($rel in 'scripts\hooks\mary-irreversible-gate.js', 'scripts\hooks\lib\ledger.js') {
   if (-not (Test-Path (Join-Path $RepoRoot $rel))) { throw "Not a Mary repo checkout: missing $rel" }
 }
 

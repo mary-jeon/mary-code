@@ -1,11 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-02
 
+No hooks. Mary is a hallucination-prevention harness: a procedure, evidence rules,
+a read-only critic, and records that survive sessions. It installs nothing that runs
+in the background and never interrupts a session on its own.
+
+- **The plugin registers no hooks.** `hooks/hooks.json` is removed and `plugin.json` no
+  longer declares a `hooks` component. Installing Mary adds one skill and one agent.
+- The approval gate, outcome recorder, trifecta sentinel, approval notifier, session
+  report, reconcile CLI, managed installers, and their tests stay in the repository as an
+  **opt-in extra**, documented in `docs/gate.md` with a manual registration block. The
+  threat model carries a scope note. Reason, from five weeks of the author's own ledger:
+  727 prompts, 460 of them the "gate bypass" category (almost all `python -c` one-liners),
+  every one approved, none dangerous — and the gate ended up switched off, which is worse
+  than never having had it.
+- `docs/gate.md` lists eight gate defects reproduced during the review and not yet fixed
+  (ungated `PowerShell` tool, `powershell -Command`/`cmd /c` wrappers, backslash-newline
+  continuation, Git-Bash `/c/` drive spelling, stdin-fed interpreters, line-scoped
+  interpreter false positives, trailing `rm`, unbounded cross-session count).
+- SKILL.md tightened where the field record showed the failures actually happen:
+  - a **Delegation** section — a granted mandate holds for the session; stage 1–2
+    confirmations are not re-asked under it; reporting never ends the turn; the only stops
+    are irreversible actions and stagnation;
+  - stage 0 opens with "discussion or execution?" when invocation and wording diverge;
+  - stage 3 gains three production rules: an unsourced value is labeled `unverified`
+    (an empty cell beats an invented one), changing an input means recomputing every
+    dependent before "final", and a computed value no verdict consumes is a defect;
+  - stage 4-1 gains three evidence-reading rules: verdict inputs independent of the thing
+    judged, every reported number read off the artifact (never hand-computed or copied),
+    and omissions found by enumeration rather than inspection;
+  - stage 4-5 no longer refers to hooks; the approval is the procedure and its record;
+  - standing principles: time pressure shrinks output, never procedure; a mandate is not
+    re-asked for.
+- Both READMEs rewritten around the procedure; gate documentation moved to `docs/gate.md`.
 - Self-hosted plugin marketplace manifest (`.claude-plugin/marketplace.json`):
-  installation becomes `/plugin marketplace add mary-jeon/mary-code` +
-  `/plugin install mary@mary-code`. Both READMEs now lead with the marketplace
-  install; the skills-directory clone remains as the manual path.
+  installation is `/plugin marketplace add mary-jeon/mary-code` +
+  `/plugin install mary@mary-code`; the skills-directory clone remains as the manual path.
 
 ## 0.4.5 — 2026-08-05
 
